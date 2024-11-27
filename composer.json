@@ -1,5 +1,5 @@
 {
-    "name": "risetechapps/repository",
+    "name": "risetechapps/repository-for-laravel",
     "description": "",
     "keywords": [
         "risetechapps",
@@ -7,7 +7,7 @@
         "repository",
         "Model"
     ],
-    "homepage": "https://github.com/risetechapps/repository",
+    "homepage": "https://github.com/risetechapps/repository-for-laravel",
     "license": "MIT",
     "type": "library",
     "authors": [

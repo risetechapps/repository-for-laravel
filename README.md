@@ -1,52 +1,72 @@
-# Very short description of the package
+# Laravel Repository
 
-[![Latest Version on Packagist](https://img.shields.io/packagist/v/risetech/repository.svg?style=flat-square)](https://packagist.org/packages/risetech/repository)
-[![Total Downloads](https://img.shields.io/packagist/dt/risetech/repository.svg?style=flat-square)](https://packagist.org/packages/risetech/repository)
-![GitHub Actions](https://github.com/risetech/repository/actions/workflows/main.yml/badge.svg)
+## 📌 Sobre o Projeto
+O **Laravel Repository** é um package para Laravel que abstrair a camada de dados, tornando nossa aplicação mais flexível para manutenção.
 
-This is where your description should go. Try and limit it to a paragraph or two, and maybe throw in a mention of what PSRs you support to avoid any confusion with users and contributors.
 
-## Installation
+---
 
-You can install the package via composer:
+## 🚀 Instalação
 
+### 1️⃣ Requisitos
+Antes de instalar, certifique-se de que seu projeto atenda aos seguintes requisitos:
+- PHP >= 8.0
+- Laravel >= 10
+- Composer instalado
+
+### 2️⃣ Instalação do Package
+Execute o seguinte comando no terminal:
 ```bash
-composer require risetechapps/repository
+  composer require risetechapps/repository-for-laravel
 ```
 
-## Usage
+### 3️⃣ Publicar Configurações
+```bash
+  php artisan vendor:publish --provider="RiseTechApps\Repository\RepositoryServiceProvider"
+```
 
+### 4️⃣ Crie um Repository
+```bash
+  php artisan make:repository {name}
+```
+
+### 4️⃣ Verifique e configure o Model
 ```php
-// Usage description here
+  class ClientEloquentRepository extends BaseRepository implements ClientRepository
+  {
+    public function entity(): string
+    {
+        return Client::class;
+    }
+
+    public function entityOn(): Client
+    {
+        return new Client();
+    }
+  }
+
+
+  interface ClientRepository extends RepositoryInterface
+  {
+    public function entityOn();
+  }
+  
 ```
+---
 
-### Testing
+## 🛠 Contribuição
+Sinta-se à vontade para contribuir! Basta seguir estes passos:
+1. Faça um fork do repositório
+2. Crie uma branch (`feature/nova-funcionalidade`)
+3. Faça um commit das suas alterações
+4. Envie um Pull Request
 
-```bash
-composer test
-```
+---
 
-### Changelog
+## 📜 Licença
+Este projeto é distribuído sob a licença MIT. Veja o arquivo [LICENSE](LICENSE) para mais detalhes.
 
-Please see [CHANGELOG](CHANGELOG.md) for more information what has changed recently.
+---
 
-## Contributing
+💡 **Desenvolvido por [Rise Tech](https://risetech.com.br)**
 
-Please see [CONTRIBUTING](CONTRIBUTING.md) for details.
-
-### Security
-
-If you discover any security related issues, please email apps@risetech.com.br instead of using the issue tracker.
-
-## Credits
-
--   [Rise Tech](https://github.com/risetechapps)
--   [All Contributors](../../contributors)
-
-## License
-
-The MIT License (MIT). Please see [License File](LICENSE.md) for more information.
-
-## Laravel Package Boilerplate
-
-This package was generated using the [Laravel Package Boilerplate](https://laravelpackageboilerplate.com).

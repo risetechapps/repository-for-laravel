@@ -11,8 +11,9 @@ interface RepositoryInterface
 
     public function find($id): static;
 
-    public function findWhere($column, $valor);
+    public function findWhere(array $conditions);
 
+    public function findWhereCustom(array $conditions);
     public function findWhereEmail($valor);
 
     public function findWhereFirst($column, $valor);

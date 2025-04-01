@@ -87,7 +87,7 @@ abstract class BaseRepository implements RepositoryInterface
             Cache::tags([get_class($this->entity)])->flush();
         }
 
-        try{
+        try {
             dispatch(new RegenerateCacheJob($this, [
                 Repository::$methodFirst,
                 Repository::$methodAll,
@@ -98,7 +98,7 @@ abstract class BaseRepository implements RepositoryInterface
                 Repository::$methodDataTable,
                 Repository::$methodOrder,
             ], $parameters));
-        }catch(\Exception $exception){
+        } catch (\Exception $exception) {
 
         }
 
@@ -143,12 +143,72 @@ abstract class BaseRepository implements RepositoryInterface
         }, Repository::$methodFind, [$id]);
     }
 
-    public function findWhere($column, $valor)
+    public function findWhere(array $conditions)
     {
-        return $this->rememberCache(function () use ($column, $valor) {
-            return $this->applySoftDeletes($this->entity)->where($column, $valor)->get();
-        }, Repository::$methodFindWhere, [$column, $valor]);
+        return $this->rememberCache(function () use ($conditions) {
+            $query = $this->applySoftDeletes($this->entity);
+
+            foreach ($conditions as $column => $value) {
+                $query = $query->where($column, $value);
+            }
+            return $query->get();
+        }, Repository::$methodFindWhere, [$conditions]);
     }
+
+    public function findWhereCustom(array $conditions)
+    {
+        return $this->rememberCache(function () use ($conditions) {
+            $query = $this->applySoftDeletes($this->entity);
+
+            foreach ($conditions as $filter) {
+                if (isset($filter['orGroup']) && is_array($filter['orGroup'])) {
+                    $query = $query->where(function ($q) use ($filter) {
+                        foreach ($filter['orGroup'] as $orFilter) {
+                            if (!isset($orFilter['column'], $orFilter['operator'], $orFilter['value'])) {
+                                continue;
+                            }
+
+                            $column = $orFilter['column'];
+                            $operator = strtoupper($orFilter['operator']);
+                            $value = $orFilter['value'];
+
+                            if ($operator === 'IN' && is_array($value)) {
+                                $q->orWhereIn($column, $value);
+                            } elseif ($operator === 'LIKE') {
+                                $q->orWhere($column, 'LIKE', "%{$value}%");
+                            } else {
+                                $q->orWhere($column, $operator, $value);
+                            }
+                        }
+                    });
+                    continue;
+                }
+
+                if (!isset($filter['column'], $filter['operator'], $filter['value'])) {
+                    continue;
+                }
+
+                $column = $filter['column'];
+                $operator = strtoupper($filter['operator']);
+                $value = $filter['value'];
+
+                if (in_array($column, ['start', 'end']) && $operator === 'BETWEEN' && is_array($value) && count($value) === 2) {
+                    $query = $query->whereBetween($column, [$value[0], $value[1]]);
+                } elseif (in_array($column, ['start', 'end']) && preg_match('/^\d{4}-\d{2}-\d{2}$/', $value)) {
+                    $query = $query->whereDate($column, $operator, Carbon::parse($value));
+                } elseif ($operator === 'IN' && is_array($value)) {
+                    $query = $query->whereIn($column, $value);
+                } elseif ($operator === 'LIKE') {
+                    $query = $query->where($column, 'LIKE', "%{$value}%");
+                } else {
+                    $query = $query->where($column, $operator, $value);
+                }
+            }
+
+            return $query->get();
+        }, Repository::$methodFindWhereCustom, [$conditions]);
+    }
+
 
     public function findWhereEmail($valor)
     {

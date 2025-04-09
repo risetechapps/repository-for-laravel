@@ -158,57 +158,81 @@ abstract class BaseRepository implements RepositoryInterface
     public function findWhereCustom(array $conditions)
     {
         return $this->rememberCache(function () use ($conditions) {
-            $query = $this->applySoftDeletes($this->entity);
+        $query = $this->applySoftDeletes($this->entity);
 
-            foreach ($conditions as $filter) {
-                if (isset($filter['orGroup']) && is_array($filter['orGroup'])) {
-                    $query = $query->where(function ($q) use ($filter) {
-                        foreach ($filter['orGroup'] as $orFilter) {
-                            if (!isset($orFilter['column'], $orFilter['operator'], $orFilter['value'])) {
-                                continue;
-                            }
+        foreach ($conditions as $filter) {
+            $this->applyCustomFilter($query, $filter);
+        }
 
-                            $column = $orFilter['column'];
-                            $operator = strtoupper($orFilter['operator']);
-                            $value = $orFilter['value'];
-
-                            if ($operator === 'IN' && is_array($value)) {
-                                $q->orWhereIn($column, $value);
-                            } elseif ($operator === 'LIKE') {
-                                $q->orWhere($column, 'LIKE', "%{$value}%");
-                            } else {
-                                $q->orWhere($column, $operator, $value);
-                            }
-                        }
-                    });
-                    continue;
-                }
-
-                if (!isset($filter['column'], $filter['operator'], $filter['value'])) {
-                    continue;
-                }
-
-                $column = $filter['column'];
-                $operator = strtoupper($filter['operator']);
-                $value = $filter['value'];
-
-                if (in_array($column, ['start', 'end']) && $operator === 'BETWEEN' && is_array($value) && count($value) === 2) {
-                    $query = $query->whereBetween($column, [$value[0], $value[1]]);
-                } elseif (in_array($column, ['start', 'end']) && preg_match('/^\d{4}-\d{2}-\d{2}$/', $value)) {
-                    $query = $query->whereDate($column, $operator, Carbon::parse($value));
-                } elseif ($operator === 'IN' && is_array($value)) {
-                    $query = $query->whereIn($column, $value);
-                } elseif ($operator === 'LIKE') {
-                    $query = $query->where($column, 'LIKE', "%{$value}%");
-                } else {
-                    $query = $query->where($column, $operator, $value);
-                }
-            }
-
-            return $query->get();
+        return $query->get();
         }, Repository::$methodFindWhereCustom, [$conditions]);
     }
 
+    private function applyCustomFilter(&$query, array $filter, $isOr = false): void
+    {
+        if (isset($filter['orGroup']) && is_array($filter['orGroup'])) {
+            $query = $query->where(function ($q) use ($filter) {
+                foreach ($filter['orGroup'] as $groupFilter) {
+                    $this->applyCustomFilter($q, $groupFilter, true);
+                }
+            });
+            return;
+        }
+
+        if (isset($filter['andGroup']) && is_array($filter['andGroup'])) {
+            $query = $query->where(function ($q) use ($filter) {
+                foreach ($filter['andGroup'] as $groupFilter) {
+                    $this->applyCustomFilter($q, $groupFilter, false);
+                }
+            });
+            return;
+        }
+
+        // filtros simples
+        if (!isset($filter['column'], $filter['operator'])) {
+            return;
+        }
+
+        $column = $filter['column'];
+        $operator = strtoupper($filter['operator']);
+        $value = $filter['value'] ?? null;
+
+        // BETWEEN
+        if ($operator === 'BETWEEN' && is_array($value) && count($value) === 2) {
+            $isOr ? $query = $query->orWhereBetween($column, $value) : $query = $query->whereBetween($column, $value);
+            return;
+        }
+
+        // IN
+        if ($operator === 'IN' && is_array($value)) {
+            $isOr ? $query = $query->orWhereIn($column, $value) : $query = $query->whereIn($column, $value);
+            return;
+        }
+
+        // IS NULL / IS NOT NULL
+        if ($operator === 'IS' && $value === null) {
+            $isOr ? $query = $query->orWhereNull($column) : $query = $query->whereNull($column);
+            return;
+        }
+
+        if ($operator === 'IS NOT' && $value === null) {
+            $isOr ? $query = $query->orWhereNotNull($column) : $query = $query->whereNotNull($column);
+            return;
+        }
+
+        // LIKE
+        if ($operator === 'LIKE') {
+            $isOr
+                ? $query = $query->orWhere($column, 'LIKE', "%{$value}%")
+                : $query = $query->where($column, 'LIKE', "%{$value}%");
+            return;
+        }
+
+        // Default
+        $isOr
+            ? $query = $query->orWhere($column, $operator, $value)
+            : $query = $query->where($column, $operator, $value);
+    }
 
     public function findWhereEmail($valor)
     {

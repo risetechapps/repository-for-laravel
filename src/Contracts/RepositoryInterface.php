@@ -38,5 +38,5 @@ interface RepositoryInterface
 
     public function orderBy($column, $order = 'DESC');
 
-    public function useTrashed(string $permission): static;
+    public function useTrashed(string|bool $permission): static;
 }

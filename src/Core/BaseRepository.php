@@ -16,7 +16,7 @@ abstract class BaseRepository implements RepositoryInterface
     protected Carbon $tll;
     protected $driver;
     protected bool $supportTag = false;
-    protected string $permission = '';
+    protected string|bool $permission = false;
     protected $relationships = [];
     protected string|int $id;
     protected bool $hasContainsSoftDelete = false;
@@ -47,9 +47,12 @@ abstract class BaseRepository implements RepositoryInterface
     public function Trashed(): bool
     {
         if ($this->hasContainsSoftDelete) {
-            if($this->permission !== '' || $this->permission  !== null) return false;
+            if($this->permission !== '' || $this->permission  !== null || $this->permission !== false) return false;
 
-            if(auth()->check()){
+
+            if($this->permission) return true;
+
+            if(auth()->check() && is_string($this->permission)){
                 if(auth()->user()->hasPermission($this->permission)){
                   return true;
                 }
@@ -385,7 +388,7 @@ abstract class BaseRepository implements RepositoryInterface
         return $this;
     }
 
-    public function useTrashed(string $permission): static
+    public function useTrashed(string|bool $permission): static
     {
         $this->permission = $permission;
         return $this;

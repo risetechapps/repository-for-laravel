@@ -39,4 +39,6 @@ interface RepositoryInterface
     public function orderBy($column, $order = 'DESC');
 
     public function useTrashed(string|bool $permission): static;
+
+    public function clearCacheForEntity(string $method = '', array $parameters = []): void;
 }

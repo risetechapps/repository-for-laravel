@@ -9,6 +9,7 @@ use RiseTechApps\Repository\Contracts\RepositoryInterface;
 use RiseTechApps\Repository\Exception\NotEntityDefinedException;
 use RiseTechApps\Repository\Jobs\RegenerateCacheJob;
 use RiseTechApps\Repository\Repository;
+use SebastianBergmann\Template\RuntimeException;
 
 abstract class BaseRepository implements RepositoryInterface
 {
@@ -46,19 +47,28 @@ abstract class BaseRepository implements RepositoryInterface
 
     public function Trashed(): bool
     {
-        if ($this->hasContainsSoftDelete) {
-            if($this->permission !== '' || $this->permission  !== null || $this->permission !== false) return false;
+        try {
+            if ($this->hasContainsSoftDelete) {
 
+                if (app()->runningInConsole()) {
+                    return $this->permission;
+                }
 
-            if($this->permission) return true;
-
-            if(auth()->check() && is_string($this->permission)){
-                if(auth()->user()->hasPermission($this->permission)){
-                  return true;
+                if (is_string($this->permission)) {
+                    if (!auth()->check()) return false;
+                    if (auth()->user()->hasPermission($this->permission) === true) {
+                        return true;
+                    } else {
+                        return false;
+                    }
+                } else if (is_bool($this->permission)) {
+                    return $this->permission;
                 }
             }
+            return false;
+        } catch (\Exception|RuntimeException|\Throwable $e) {
+            return false;
         }
-        return false;
     }
 
     public function containsSoftDelete(): bool
@@ -146,7 +156,7 @@ abstract class BaseRepository implements RepositoryInterface
     public function findById($id)
     {
         return $this->rememberCache(function () use ($id) {
-            return $this->applySoftDeletes($this->entity)->find($id);
+        return $this->applySoftDeletes($this->entity)->find($id);
         }, Repository::$methodFind, [$id]);
     }
 
@@ -165,13 +175,13 @@ abstract class BaseRepository implements RepositoryInterface
     public function findWhereCustom(array $conditions)
     {
         return $this->rememberCache(function () use ($conditions) {
-        $query = $this->applySoftDeletes($this->entity);
+            $query = $this->applySoftDeletes($this->entity);
 
-        foreach ($conditions as $filter) {
-            $this->applyCustomFilter($query, $filter);
-        }
+            foreach ($conditions as $filter) {
+                $this->applyCustomFilter($query, $filter);
+            }
 
-        return $query->get();
+            return $query->get();
         }, Repository::$methodFindWhereCustom, [$conditions]);
     }
 
@@ -251,7 +261,7 @@ abstract class BaseRepository implements RepositoryInterface
     public function findWhereFirst($column, $valor)
     {
         return $this->rememberCache(function () use ($column, $valor) {
-            return $this->applySoftDeletes($this->entity)->where($column, $valor)->first();
+        return $this->applySoftDeletes($this->entity)->where($column, $valor)->first();
         }, Repository::$methodFindWhereFirst, [$column, $valor]);
     }
 
@@ -284,8 +294,6 @@ abstract class BaseRepository implements RepositoryInterface
         $model = $this->entity->find($this->id);
 
         if (!$model) return false;
-
-        $id = $model->getKey();
 
         foreach ($this->relationships as $relationship) {
             $model->$relationship()->delete();

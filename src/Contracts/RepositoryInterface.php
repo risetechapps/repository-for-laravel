@@ -41,4 +41,6 @@ interface RepositoryInterface
     public function useTrashed(string|bool $permission): static;
 
     public function clearCacheForEntity(string $method = '', array $parameters = []): void;
+
+    public function setTags($tags): static;
 }

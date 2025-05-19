@@ -21,6 +21,7 @@ abstract class BaseRepository implements RepositoryInterface
     protected $relationships = [];
     protected string|int $id;
     protected bool $hasContainsSoftDelete = false;
+    protected array $tags = [];
 
     /**
      * @throws NotEntityDefinedException
@@ -80,6 +81,12 @@ abstract class BaseRepository implements RepositoryInterface
     {
         $entityClass = get_class($this->entity);
         $paramsHash = !empty($parameters) ? '_' . md5(json_encode($parameters)) : '';
+
+        $contexts = $this->tags;
+        if (!empty($contexts)) {
+            $paramsHash .= '_' . md5(json_encode($contexts));
+        }
+
         $name = $entityClass . DIRECTORY_SEPARATOR . $method . $paramsHash;
 
         if ($this->Trashed()) $name .= '_TRASHED';
@@ -405,5 +412,13 @@ abstract class BaseRepository implements RepositoryInterface
     private function applySoftDeletes($query)
     {
         return $this->Trashed() ? $query->withTrashed(true) : $query;
+    }
+
+    public function setTags($tags): static
+    {
+        if ($this->supportTag) {
+            $this->tags = $tags;
+        }
+        return $this;
     }
 }

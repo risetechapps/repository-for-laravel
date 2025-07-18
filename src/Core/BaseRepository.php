@@ -109,6 +109,9 @@ abstract class BaseRepository implements RepositoryInterface
     {
         if ($this->supportTag) {
             Cache::tags([get_class($this->entity)])->flush();
+
+            $apiResponseTag = str_replace('\\', '.', $this->entity);
+            Cache::tags([$apiResponseTag])->flush();
         }
 
         try {

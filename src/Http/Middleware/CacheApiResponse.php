@@ -16,7 +16,6 @@ class CacheApiResponse
      * @param int|null $ttl
      * @return Response
      */
-//    public function handle(Request $request, Closure $next, ?int $ttl = null): Response
     public function handle(Request $request, Closure $next, ?string $ttl = null, ?string $entityTag = null): Response
     {
         if (!$request->isMethod('get')) {

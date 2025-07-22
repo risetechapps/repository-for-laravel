@@ -112,6 +112,7 @@ abstract class BaseRepository implements RepositoryInterface
 
             $apiResponseTag = str_replace('\\', '.', $this->entity);
             Cache::tags([$apiResponseTag])->flush();
+            Cache::tags('api_response')->flush();
         }
 
         try {

@@ -3,7 +3,9 @@
 namespace RiseTechApps\Repository;
 
 use Illuminate\Support\ServiceProvider;
+use Illuminate\Support\Str;
 use RiseTechApps\Repository\Commands\GenerateRepositoryCommand;
+use RiseTechApps\Repository\Http\Middleware\CacheApiResponse;
 
 class RepositoryServiceProvider extends ServiceProvider
 {
@@ -22,6 +24,15 @@ class RepositoryServiceProvider extends ServiceProvider
         $this->commands([
             GenerateRepositoryCommand::class
         ]);
+
+        if (!Str::hasMacro('qualifyTagCacheResponse')) {
+            Str::macro('qualifyTagCacheResponse', function ($value) {
+
+                return str_replace('\\', '.', $value);
+            });
+        }
+
+        app('router')->aliasMiddleware('cacheResponse', CacheApiResponse::class);
     }
 
     /**

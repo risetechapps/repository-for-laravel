@@ -1,0 +1,19 @@
+<?php
+
+namespace {{ namespace }};
+
+use RiseTechApps\Repository\Core\BaseRepository;
+use {{ namespaceModel }};
+
+class {{ class }} extends BaseRepository implements {{ contract }}
+{
+    public function entity(): string
+    {
+        return {{ model }}::class;
+    }
+
+    public function entityOn(): {{ model }}
+    {
+        return new {{ model }}();
+    }
+}

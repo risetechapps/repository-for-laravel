@@ -4,15 +4,20 @@ namespace RiseTechApps\Repository\Core;
 
 use Carbon\Carbon;
 use Illuminate\Database\Eloquent\SoftDeletes;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 use RiseTechApps\Repository\Contracts\RepositoryInterface;
 use RiseTechApps\Repository\Exception\NotEntityDefinedException;
+use RiseTechApps\Repository\Jobs\RefreshMaterializedViewsJob;
 use RiseTechApps\Repository\Jobs\RegenerateCacheJob;
 use RiseTechApps\Repository\Repository;
 use SebastianBergmann\Template\RuntimeException;
 
 abstract class BaseRepository implements RepositoryInterface
 {
+    protected ?string $activeView = null;
+
     public $entity;
     protected Carbon $tll;
     protected $driver;
@@ -126,6 +131,10 @@ abstract class BaseRepository implements RepositoryInterface
                 Repository::$methodDataTable,
                 Repository::$methodOrder,
             ], $parameters));
+
+            //refresh views
+
+            dispatch(new RefreshMaterializedViewsJob($this, ['auth' => auth()->user()]));
         } catch (\Exception $exception) {
 
         }
@@ -159,6 +168,9 @@ abstract class BaseRepository implements RepositoryInterface
 
     public function get()
     {
+        if ($this->activeView) {
+            return collect(DB::table($this->activeView)->get());
+        }
         return $this->rememberCache(function () {
             return $this->applySoftDeletes($this->entity)->get();
         }, Repository::$methodAll);
@@ -167,7 +179,7 @@ abstract class BaseRepository implements RepositoryInterface
     public function findById($id)
     {
         return $this->rememberCache(function () use ($id) {
-        return $this->applySoftDeletes($this->entity)->find($id);
+            return $this->applySoftDeletes($this->entity)->find($id);
         }, Repository::$methodFind, [$id]);
     }
 
@@ -272,7 +284,7 @@ abstract class BaseRepository implements RepositoryInterface
     public function findWhereFirst($column, $valor)
     {
         return $this->rememberCache(function () use ($column, $valor) {
-        return $this->applySoftDeletes($this->entity)->where($column, $valor)->first();
+            return $this->applySoftDeletes($this->entity)->where($column, $valor)->first();
         }, Repository::$methodFindWhereFirst, [$column, $valor]);
     }
 
@@ -422,6 +434,75 @@ abstract class BaseRepository implements RepositoryInterface
     {
         if ($this->supportTag) {
             $this->tags = $tags;
+        }
+        return $this;
+    }
+
+    public function createMaterializedViews(): void
+    {
+        foreach ($this->registerViews() as $view => $query) {
+            if (!$this->materializedViewExists($view)) {
+                $this->createSingleMaterializedView($view, $query);
+            }
+        }
+    }
+
+    protected function createSingleMaterializedView(string $view, string $query): void
+    {
+        try {
+
+            DB::statement("CREATE MATERIALIZED VIEW {$view} AS {$query}");
+            DB::statement("CREATE UNIQUE INDEX IF NOT EXISTS {$view}_idx ON {$view}(id)");
+            DB::table('materialized_views')->updateOrInsert(
+                ['name' => $view],
+                [
+                    'user_id' => auth()->id(),
+                    'created_at' => now(),
+                    'last_refreshed_at' => now(),
+                    'active' => true,
+                ]
+            );
+        } catch (\Throwable $e) {
+        }
+    }
+
+    protected function materializedViewExists(string $view): bool
+    {
+        $result = DB::select("
+        SELECT 1 FROM pg_matviews WHERE schemaname = 'public' AND matviewname = ?
+    ", [$view]);
+
+        return !empty($result);
+    }
+
+    public function refreshMaterializedViews(?string $view = null, bool $concurrently = true): void
+    {
+        $this->createMaterializedViews();
+
+        $views = $view ? [$view] : array_keys($this->registerViews());
+
+        foreach ($views as $v) {
+            try {
+                $sql = $concurrently
+                    ? "REFRESH MATERIALIZED VIEW CONCURRENTLY {$v};"
+                    : "REFRESH MATERIALIZED VIEW {$v};";
+
+                DB::statement($sql);
+
+                DB::table('materialized_views')
+                    ->where('name', $v)
+                    ->update(['last_refreshed_at' => now()]);
+            } catch (\Throwable $e) {
+            }
+        }
+    }
+
+    public function useMaterializedView(string $view): static
+    {
+        if (auth()->check()) {
+            $this->activeView = $view . "_" . str_replace('-', '_', Auth::user()->id);
+        } else {
+            $this->activeView = $view;
         }
         return $this;
     }

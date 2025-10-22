@@ -14,6 +14,7 @@ interface RepositoryInterface
     public function findWhere(array $conditions);
 
     public function findWhereCustom(array $conditions);
+
     public function findWhereEmail($valor);
 
     public function findWhereFirst($column, $valor);
@@ -42,5 +43,17 @@ interface RepositoryInterface
 
     public function clearCacheForEntity(string $method = '', array $parameters = []): void;
 
+    public function entity();
+
+    public function entityOn();
+
     public function setTags($tags): static;
+
+    public function registerViews(): array;
+
+    public function createMaterializedViews(): void;
+
+    public function refreshMaterializedViews(?string $view = null, bool $concurrently = true): void;
+
+    public function useMaterializedView(string $view): static;
 }

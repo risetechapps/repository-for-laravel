@@ -33,5 +33,6 @@ class RefreshMaterializedViewsJob implements ShouldQueue
         }
 
         $this->repository->refreshMaterializedViews();
+
     }
 }

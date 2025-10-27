@@ -8,6 +8,8 @@ use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use RiseTechApps\Repository\Contracts\RepositoryInterface;
+use RiseTechApps\Repository\Events\AfterRefreshMaterializedViewsJobEvent;
+use RiseTechApps\Repository\Events\BeforeRefreshMaterializedViewsJobEvent;
 use RiseTechApps\Repository\Exception\NotEntityDefinedException;
 use RiseTechApps\Repository\Jobs\RefreshMaterializedViewsJob;
 use RiseTechApps\Repository\Jobs\RegenerateCacheJob;
@@ -161,6 +163,9 @@ abstract class BaseRepository implements RepositoryInterface
 
     public function first()
     {
+        if ($this->activeView) {
+            return collect(DB::table($this->activeView)->first());
+        }
         return $this->rememberCache(function () {
             return $this->applySoftDeletes($this->entity)->first();
         }, Repository::$methodFirst);
@@ -483,6 +488,7 @@ abstract class BaseRepository implements RepositoryInterface
 
         foreach ($views as $v) {
             try {
+                event(new AfterRefreshMaterializedViewsJobEvent($v));
                 $sql = $concurrently
                     ? "REFRESH MATERIALIZED VIEW CONCURRENTLY {$v};"
                     : "REFRESH MATERIALIZED VIEW {$v};";
@@ -492,7 +498,11 @@ abstract class BaseRepository implements RepositoryInterface
                 DB::table('materialized_views')
                     ->where('name', $v)
                     ->update(['last_refreshed_at' => now()]);
+
+                event(new BeforeRefreshMaterializedViewsJobEvent($v));
+
             } catch (\Throwable $e) {
+                dd($e);
             }
         }
     }

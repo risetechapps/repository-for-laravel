@@ -469,7 +469,8 @@ abstract class BaseRepository implements RepositoryInterface
                     'active' => true,
                 ]
             );
-        } catch (\Throwable $e) { dd($e);
+        } catch (\Throwable $e) {
+            dd($e);
         }
     }
 
@@ -511,11 +512,7 @@ abstract class BaseRepository implements RepositoryInterface
 
     public function useMaterializedView(string $view): static
     {
-        if (auth()->check()) {
-            $this->activeView = $view . "_" . str_replace('-', '_', Auth::user()->id);
-        } else {
-            $this->activeView = $view;
-        }
+        $this->activeView = $view;
         return $this;
     }
 }

@@ -54,6 +54,10 @@
         "sort-packages": true
     },
     "extra": {
+        "branch-alias": {
+            "dev-main": "1.x-main",
+            "dev-develop": "1.x-dev"
+        },
         "laravel": {
             "providers": [
                 "RiseTechApps\\Repository\\RepositoryServiceProvider"

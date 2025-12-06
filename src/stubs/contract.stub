@@ -6,5 +6,5 @@ use RiseTechApps\Repository\Contracts\RepositoryInterface;
 
 interface {{ class }} extends RepositoryInterface
 {
-    public function entityOn();
+    
 }

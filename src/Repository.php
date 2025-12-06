@@ -2,9 +2,13 @@
 
 namespace RiseTechApps\Repository;
 
+use Illuminate\Container\Container;
+use RiseTechApps\Repository\Contracts\RepositoryInterface;
+use RiseTechApps\Repository\Core\BaseRepository;
+
 class Repository
 {
-    public static array $driverNotSupported = ["file"];
+    public static array $driverNotSupported = ["file", "database"];
     public static string $methodFirst = 'FIRST';
     public static string $methodAll = 'ALL';
     public static string $methodFind = 'FIND';
@@ -28,19 +32,16 @@ class Repository
 
     public static function getBindingsRepository(): array
     {
-        $bindings = app()->getBindings();
+        $allBindings = app()->getBindings();
 
-        return collect($bindings)
-            ->filter(function ($binding, $abstract) {
-                return str_contains($abstract, 'Repository');
-            })
-            ->map(function ($binding, $abstract) {
-                return [
-                    'interface' => $abstract,
-                    'concrete'  => $binding['concrete'],
-                ];
-            })
-            ->values()
-            ->toArray();
+        $repositoryContracts = [];
+
+        foreach (array_keys($allBindings) as $contractName) {
+            if (str_contains($contractName, 'Repository') && is_subclass_of($contractName,'RiseTechApps\Repository\Contracts\RepositoryInterface')) {
+                $repositoryContracts[] = $contractName;
+            }
+        }
+
+        return $repositoryContracts;
     }
 }

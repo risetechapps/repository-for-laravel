@@ -8,7 +8,7 @@ use Illuminate\Support\Facades\File;
 
 class GenerateRepositoryCommand extends Command
 {
-    protected $signature = 'make:repository {name}';
+    protected $signature = 'repository:make {name}';
 
     protected $description = 'Make and interface class repository';
 
@@ -26,51 +26,58 @@ class GenerateRepositoryCommand extends Command
 
     public function handle(): void
     {
-        $path = app_path('Repositories');
-        $pathRepository = app_path('Repositories\\' . $this->argument('name'));
+        $repositoryName = str_replace('/', '\\', $this->argument('name'));
+        $repositoryName = trim($repositoryName, '\\');
 
-        $this->line("Creating Repository " . $this->argument('name') . "...");
+        $basePath = app_path('Repositories');
+        $pathRepository = $basePath . DIRECTORY_SEPARATOR . str_replace('\\', DIRECTORY_SEPARATOR, $repositoryName);
+
+        $this->line("Creating Repository " . $repositoryName . "...");
 
         if (is_dir($pathRepository)) {
-            $this->error("Repository " . $this->argument('name') . " - " . $pathRepository . " already exists");
+            $this->error("Repository " . $repositoryName . " - " . $pathRepository . " already exists");
             return;
         }
 
         $this->setAskModel();
 
-        if (!is_dir($path)) File::makeDirectory($path);
+        if (!is_dir($basePath)) File::makeDirectory($basePath);
         if (!is_dir($pathRepository)) File::makeDirectory($pathRepository);
 
         $this->getStubContentsInterface($pathRepository);
         $this->getStubContentsEloquent($pathRepository);
 
 
-        $this->line("Remember to register " . $this->argument('name') . " at em config repository");
+        $this->line("Remember to register " . $repositoryName . " at em config repository");
 
         $this->line("Ex: '" .
-            $this->getNamespace() . "\\" . $this->getNameClass("Repository") . "::class' => '" .
-            $this->getNamespace() . "\\" . $this->getNameClass("EloquentRepository") . "::class'"
+            $this->getNamespace($repositoryName) . "\\" . $this->getNameClass("Repository") . "::class' => '" .
+            $this->getNamespace($repositoryName) . "\\" . $this->getNameClass("EloquentRepository") . "::class'"
         );
 
-        $this->line("Repository " . $this->argument('name') . " created successfully");
+        $this->line("Repository " . $repositoryName . " created successfully");
     }
 
     public function setAskModel(): void
     {
-        $model = $this->ask('What is the model namespace ? Ex: \Client\ClientModel');
+        while (is_null($this->model) || empty($this->model)) {
+            $model = $this->ask('What is the model namespace ? Ex: App\\Models\\Client');
 
-        if (is_null($model) || empty($model)) {
-            $this->error('Need to enter the model namespace');
-            $this->setAskModel();
+            if (is_null($model) || empty($model)) {
+                $this->error('Need to enter the model namespace');
+            } else {
+                $this->model = $model;
+            }
         }
-
-        $this->model = $model;
     }
 
     public function getStubContentsInterface(string $path): void
     {
+        $repositoryName = str_replace('/', '\\', $this->argument('name'));
+        $repositoryName = trim($repositoryName, '\\');
+
         $list = [
-            '{{ namespace }}' => $this->getNamespace(),
+            '{{ namespace }}' => $this->getNamespace($repositoryName),
             '{{ class }}' => $this->getNameClass('Repository'),
         ];
 
@@ -80,18 +87,21 @@ class GenerateRepositoryCommand extends Command
             $contents = str_replace($item, $value, $contents);
         }
 
-        $this->files->put($path . "\\" . $this->getNameClass('Repository') . ".php", $contents);
+        $this->files->put($path . DIRECTORY_SEPARATOR . $this->getNameClass('Repository') . ".php", $contents);
     }
 
 
     private function getStubContentsEloquent(string $path): void
     {
+        $repositoryName = str_replace('/', '\\', $this->argument('name'));
+        $repositoryName = trim($repositoryName, '\\');
+
         $list = [
-            '{{ namespace }}' => $this->getNamespace(),
+            '{{ namespace }}' => $this->getNamespace($repositoryName),
             '{{ class }}' => $this->getNameClass('EloquentRepository'),
             '{{ model }}' => $this->model,
-            '{{ contract }}' => $this->model . "Repository",
-            '{{ namespaceModel }}' => $this->getNameModel(),
+            '{{ contract }}' => $this->getModelNameOnly() . "Repository",
+            '{{ namespaceModel }}' => $this->model,
         ];
 
         $contents = file_get_contents($this->getStubPathEloquent());
@@ -100,7 +110,7 @@ class GenerateRepositoryCommand extends Command
             $contents = str_replace($item, $value, $contents);
         }
 
-        $this->files->put($path . "\\" . $this->getNameClass('EloquentRepository') . ".php", $contents);
+        $this->files->put($path . DIRECTORY_SEPARATOR . $this->getNameClass('EloquentRepository') . ".php", $contents);
     }
 
     public function getStubPathInterface(): string
@@ -113,18 +123,19 @@ class GenerateRepositoryCommand extends Command
         return __DIR__ . '/../stubs/eloquent.stub';
     }
 
-    public function getNamespace(): string
+    public function getNamespace(string $repositoryName): string
     {
-        return "App\\Repositories\\" . $this->model;
+        return "App\\Repositories\\" . $repositoryName;
+    }
+
+    private function getModelNameOnly(): string
+    {
+        $parts = explode('\\', $this->model);
+        return end($parts);
     }
 
     public function getNameClass( string $name):string
     {
-        return $this->model . $name;
-    }
-
-    public function getNameModel(): string
-    {
-        return "App\\Models\\" . $this->model;
+        return $this->getModelNameOnly() . $name;
     }
 }

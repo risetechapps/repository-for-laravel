@@ -5,6 +5,8 @@ namespace RiseTechApps\Repository;
 use Illuminate\Support\ServiceProvider;
 use Illuminate\Support\Str;
 use RiseTechApps\Repository\Commands\GenerateRepositoryCommand;
+use RiseTechApps\Repository\Commands\RepositoryClearCacheCommand;
+use RiseTechApps\Repository\Commands\RepositoryRefreshMaterializedViewsCommand;
 use RiseTechApps\Repository\Http\Middleware\CacheApiResponse;
 
 class RepositoryServiceProvider extends ServiceProvider
@@ -15,6 +17,8 @@ class RepositoryServiceProvider extends ServiceProvider
     public function boot(): void
     {
 
+        $this->loadMigrationsFrom(__DIR__ . '/../database/migrations');
+
         if ($this->app->runningInConsole()) {
             $this->publishes([
                 __DIR__ . '/../config/config.php' => config_path('repository.php'),
@@ -22,7 +26,9 @@ class RepositoryServiceProvider extends ServiceProvider
         }
 
         $this->commands([
-            GenerateRepositoryCommand::class
+            GenerateRepositoryCommand::class,
+            RepositoryRefreshMaterializedViewsCommand::class,
+            RepositoryClearCacheCommand::class,
         ]);
 
         if (!Str::hasMacro('qualifyTagCacheResponse')) {

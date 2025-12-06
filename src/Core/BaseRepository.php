@@ -445,7 +445,9 @@ abstract class BaseRepository implements RepositoryInterface
 
     public function createMaterializedViews(): void
     {
+
         foreach ($this->registerViews() as $view => $query) {
+
             if (!$this->materializedViewExists($view)) {
                 $this->createSingleMaterializedView($view, $query);
             }
@@ -467,7 +469,7 @@ abstract class BaseRepository implements RepositoryInterface
                     'active' => true,
                 ]
             );
-        } catch (\Throwable $e) {
+        } catch (\Throwable $e) { dd($e);
         }
     }
 

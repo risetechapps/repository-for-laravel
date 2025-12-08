@@ -510,6 +510,16 @@ abstract class BaseRepository implements RepositoryInterface
         }
     }
 
+    public function cleanMaterializedView()
+    {
+        foreach ($this->registerViews() as $view => $query) {
+
+            if ($this->materializedViewExists($view)) {
+                DB::statement("DROP MATERIALIZED VIEW IF EXISTS ${view};");
+            }
+        }
+    }
+
     public function useMaterializedView(string $view): static
     {
         $this->activeView = $view;

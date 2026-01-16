@@ -7,6 +7,7 @@ use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use RiseTechApps\Repository\Contracts\RepositoryInterface;
 use RiseTechApps\Repository\Events\AfterRefreshMaterializedViewsJobEvent;
 use RiseTechApps\Repository\Events\BeforeRefreshMaterializedViewsJobEvent;
@@ -370,17 +371,74 @@ abstract class BaseRepository implements RepositoryInterface
         return $restored;
     }
 
+    public function select(array $columns = ['*']): static
+    {
+        if (count($columns) === 1 && $columns[0] === '*') {
+            return $this;
+        }
+
+        $formattedColumns = array_map(function ($col) {
+            if (str_contains($col, '.')) {
+                $parts = explode('.', $col);
+                $tableColumn = $parts[0];
+                $jsonKey = $parts[1];
+
+                return DB::raw("\"{$tableColumn}\"->>'{$jsonKey}' as \"{$col}\"");
+            }
+
+            return $col;
+        }, $columns);
+
+        if (!in_array('id', $columns) && !in_array('id', $formattedColumns)) {
+            $formattedColumns[] = 'id';
+        }
+
+        $this->entity = $this->entity->select($formattedColumns);
+
+        return $this;
+    }
+
+    /**
+     * Paginação ultra-dinâmica baseada em campos enviados pelo Frontend
+     */
     public function paginate($totalPage = 10): array
     {
-        $data = $this->Trashed() ? $this->entity->withTrashed(true)->paginate($totalPage) :
-            $this->entity->paginate($totalPage);
+        $request = request();
+        $perPage = $request->get('pagesize', $totalPage);
+        $search = $request->get('search');
+
+        $searchableFields = $request->get('searchable_fields', []);
+
+        $query = $this->applySoftDeletes($this->entity);
+
+        if (!empty(trim($search)) && !empty($searchableFields)) {
+
+            $query = $query->where(function ($mainQuery) use ($search, $searchableFields) {
+                foreach ($searchableFields as $index => $field) {
+                    $dbField = str_replace('.', '->', $field);
+
+                    if ($index === 0) {
+                        $mainQuery->where($dbField, 'ILIKE', "%{$search}%");
+                    } else {
+                        $mainQuery->orWhere($dbField, 'ILIKE', "%{$search}%");
+                    }
+                }
+            });
+        }
+
+        $sortColumn = str_replace('.', '->', $request->get('sort_column', 'id'));
+        $sortDirection = $request->get('sort_direction', 'asc');
+        $query = $query->orderBy($sortColumn, $sortDirection);
+
+        $data = $query->paginate($perPage);
 
         return [
             'data' => $data->items(),
-            'recordsFiltered' => 0,
+            'recordsFiltered' => $data->total(),
             'recordsTotal' => $data->total(),
             'totalPages' => $data->lastPage(),
-            'perPage' => $data->perPage()
+            'perPage' => $data->perPage(),
+            'current_page' => $data->currentPage(),
         ];
     }
 

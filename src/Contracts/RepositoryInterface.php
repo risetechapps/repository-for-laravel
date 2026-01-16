@@ -33,6 +33,8 @@ interface RepositoryInterface
 
     public function relationships(...$relationships): static;
 
+    public function select(array $columns = ['*']): static;
+
     public function paginate($totalPage = 10);
 
     public function dataTable();

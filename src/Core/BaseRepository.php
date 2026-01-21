@@ -39,8 +39,6 @@ abstract class BaseRepository implements RepositoryInterface
         $this->entity = $this->resolveEntity();
         $this->hasContainsSoftDelete = $this->containsSoftDelete();
         $this->tll = Carbon::now()->addHours(24);
-        $this->driver = Cache::getDefaultDriver();
-        $this->supportTag = !in_array($this->driver, Repository::$driverNotSupported);
     }
 
     /**
@@ -102,15 +100,21 @@ abstract class BaseRepository implements RepositoryInterface
         return $name;
     }
 
+    protected function supportsTags(): bool
+    {
+        $driver = Cache::getDefaultDriver();
+        return !in_array($driver, \RiseTechApps\Repository\Repository::$driverNotSupported);
+    }
+
     public function rememberCache(callable $call, string $method, array $parameters = [])
     {
         $cacheKey = $this->getQualifyTagCache($method, $parameters);
 
-        if ($this->supportTag) {
+        if ($this->supportsTags()) {
             return Cache::tags([$this->entity()])->remember($cacheKey, $this->tll, $call);
-        } else {
-            return Cache::remember($cacheKey, $this->tll, $call);
         }
+
+        return Cache::remember($cacheKey, $this->tll, $call);
     }
 
     public function clearCacheForEntity(string $method = '', array $parameters = []): void
@@ -528,7 +532,7 @@ abstract class BaseRepository implements RepositoryInterface
                 ]
             );
         } catch (\Throwable $e) {
-            dd($e);
+
         }
     }
 

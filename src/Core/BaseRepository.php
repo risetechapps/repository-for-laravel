@@ -25,7 +25,7 @@ abstract class BaseRepository implements RepositoryInterface
     protected Carbon $tll;
     protected $driver;
     protected bool $supportTag = false;
-    protected string|bool $permission = false;
+    protected bool $permission = false;
     protected $relationships = [];
     protected string|int $id;
     protected bool $hasContainsSoftDelete = false;
@@ -56,21 +56,7 @@ abstract class BaseRepository implements RepositoryInterface
     {
         try {
             if ($this->hasContainsSoftDelete) {
-
-                if (app()->runningInConsole()) {
-                    return $this->permission;
-                }
-
-                if (is_string($this->permission)) {
-                    if (!auth()->check()) return false;
-                    if (auth()->user()->hasPermission($this->permission) === true) {
-                        return true;
-                    } else {
-                        return false;
-                    }
-                } else if (is_bool($this->permission)) {
-                    return $this->permission;
-                }
+                return $this->permission;
             }
             return false;
         } catch (\Exception|RuntimeException|\Throwable $e) {

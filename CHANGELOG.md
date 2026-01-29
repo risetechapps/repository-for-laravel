@@ -3,6 +3,10 @@
 Todas as alterações notáveis neste projeto serão documentadas neste arquivo.
 O formato é baseado em [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), e este projeto segue o [Versionamento Semântico](https://semver.org/lang/pt-BR/) (SemVer).
 
+## [1.4.0] - 2026-01-29
+- Corrigido Log em registrar views
+- Implementado suporte a view em findWhereFirst
+
 ## [1.3.0] - 2026-01-22
 - Corrigido função Trashed, removido a verificação se é string ou bool
  

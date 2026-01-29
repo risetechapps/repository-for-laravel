@@ -279,6 +279,11 @@ abstract class BaseRepository implements RepositoryInterface
 
     public function findWhereFirst($column, $valor)
     {
+
+        if ($this->activeView) {
+            return collect(DB::table($this->activeView)->where($column, $valor)->first());
+        }
+
         return $this->rememberCache(function () use ($column, $valor) {
             return $this->applySoftDeletes($this->entity)->where($column, $valor)->first();
         }, Repository::$methodFindWhereFirst, [$column, $valor]);
@@ -507,7 +512,6 @@ abstract class BaseRepository implements RepositoryInterface
         try {
 
             DB::statement("CREATE MATERIALIZED VIEW {$view} AS {$query}");
-            DB::statement("CREATE UNIQUE INDEX IF NOT EXISTS {$view}_idx ON {$view}(id)");
             DB::table('materialized_views')->updateOrInsert(
                 ['name' => $view],
                 [
@@ -518,7 +522,7 @@ abstract class BaseRepository implements RepositoryInterface
                 ]
             );
         } catch (\Throwable $e) {
-
+            Log::error('Erro Register Materialized View', [$e->getMessage()]);
         }
     }
 

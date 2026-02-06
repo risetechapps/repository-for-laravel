@@ -567,7 +567,7 @@ abstract class BaseRepository implements RepositoryInterface
         foreach ($this->registerViews() as $view => $query) {
 
             if ($this->materializedViewExists($view)) {
-                DB::statement("DROP MATERIALIZED VIEW IF EXISTS ${view};");
+                DB::statement("DROP MATERIALIZED VIEW IF EXISTS {$view};");
             }
         }
     }

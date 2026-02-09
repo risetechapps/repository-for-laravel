@@ -119,6 +119,7 @@ abstract class BaseRepository implements RepositoryInterface
                 Repository::$methodAll,
                 Repository::$methodFind,
                 Repository::$methodFindWhere,
+                Repository::$methodFindWhereCustom,
                 Repository::$methodFindWhereEmail,
                 Repository::$methodFindWhereFirst,
                 Repository::$methodDataTable,

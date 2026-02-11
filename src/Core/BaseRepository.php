@@ -39,6 +39,7 @@ abstract class BaseRepository implements RepositoryInterface
         $this->entity = $this->resolveEntity();
         $this->hasContainsSoftDelete = $this->containsSoftDelete();
         $this->tll = Carbon::now()->addHours(24);
+        $this->supportTag = $this->supportsTags();
     }
 
     /**
@@ -71,19 +72,18 @@ abstract class BaseRepository implements RepositoryInterface
 
     private function getQualifyTagCache(string $method, array $parameters = []): string
     {
-        $entityClass = get_class($this->entity);
-        $paramsHash = !empty($parameters) ? '_' . md5(json_encode($parameters)) : '';
+        $entityClass = $this->getEntityClassName();
+        $paramsHash = !empty($parameters) ? ':' . md5(json_encode($parameters)) : '';
+        if (!empty($this->tags)) $paramsHash .= ':ctx:' . md5(json_encode($this->tags));
 
-        $contexts = $this->tags;
-        if (!empty($contexts)) {
-            $paramsHash .= '_' . md5(json_encode($contexts));
-        }
-
-        $name = $entityClass . DIRECTORY_SEPARATOR . $method . $paramsHash;
-
-        if ($this->Trashed()) $name .= '_TRASHED';
-
+        $name = "repo:{$entityClass}:{$method}{$paramsHash}";
+        if ($this->Trashed()) $name .= ':trashed';
         return $name;
+    }
+
+    protected function getEntityClassName(): string
+    {
+        return ltrim($this->entity(), '\\');
     }
 
     protected function supportsTags(): bool
@@ -106,35 +106,63 @@ abstract class BaseRepository implements RepositoryInterface
     public function clearCacheForEntity(string $method = '', array $parameters = []): void
     {
         if ($this->supportTag) {
-            Cache::tags([get_class($this->entity)])->flush();
+            $tag = $this->getEntityClassName();
 
-            $apiResponseTag = str_replace('\\', '.', $this->entity);
-            Cache::tags([$apiResponseTag])->flush();
-            Cache::tags('api_response')->flush();
+            // 1. Invalida TUDO vinculado à model (all, find, findWhereCustom, etc)
+            Cache::tags([$tag])->flush();
+
+            // 2. Invalida tags de resposta de API (se houver)
+            $apiResponseTag = str_replace('\\', '.', $tag);
+            Cache::tags([$apiResponseTag, 'api_response'])->flush();
         }
 
         try {
+            // 3. Regenera apenas caches globais pesados (all e first)
             dispatch(new RegenerateCacheJob($this, [
-                Repository::$methodFirst,
                 Repository::$methodAll,
-                Repository::$methodFind,
-                Repository::$methodFindWhere,
-                Repository::$methodFindWhereCustom,
-                Repository::$methodFindWhereEmail,
-                Repository::$methodFindWhereFirst,
-                Repository::$methodDataTable,
-                Repository::$methodOrder,
-            ], $parameters));
+                Repository::$methodFirst,
+            ]));
 
-            //refresh views
-
+            // 4. Atualiza as views materializadas no banco
             dispatch(new RefreshMaterializedViewsJob($this, ['auth' => auth()->user()]));
+
         } catch (\Exception $exception) {
-
+            Log::error("Erro ao processar limpeza de cache para {$this->getEntityClassName()}: " . $exception->getMessage());
         }
-
-        $this->clearParameterizedCaches($method, $parameters);
     }
+
+//    public function clearCacheForEntity(string $method = '', array $parameters = []): void
+//    {
+//        if ($this->supportTag) {
+//            Cache::tags([get_class($this->entity)])->flush();
+//
+//            $apiResponseTag = str_replace('\\', '.', $this->entity);
+//            Cache::tags([$apiResponseTag])->flush();
+//            Cache::tags('api_response')->flush();
+//        }
+//
+//        try {
+//            dispatch(new RegenerateCacheJob($this, [
+//                Repository::$methodFirst,
+//                Repository::$methodAll,
+//                Repository::$methodFind,
+//                Repository::$methodFindWhere,
+//                Repository::$methodFindWhereCustom,
+//                Repository::$methodFindWhereEmail,
+//                Repository::$methodFindWhereFirst,
+//                Repository::$methodDataTable,
+//                Repository::$methodOrder,
+//            ], $parameters));
+//
+//            //refresh views
+//
+//            dispatch(new RefreshMaterializedViewsJob($this, ['auth' => auth()->user()]));
+//        } catch (\Exception $exception) {
+//
+//        }
+//
+//        $this->clearParameterizedCaches($method, $parameters);
+//    }
 
     private function clearParameterizedCaches(string $method, array $parameters): void
     {

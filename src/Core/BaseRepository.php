@@ -108,61 +108,24 @@ abstract class BaseRepository implements RepositoryInterface
         if ($this->supportTag) {
             $tag = $this->getEntityClassName();
 
-            // 1. Invalida TUDO vinculado à model (all, find, findWhereCustom, etc)
             Cache::tags([$tag])->flush();
 
-            // 2. Invalida tags de resposta de API (se houver)
             $apiResponseTag = str_replace('\\', '.', $tag);
             Cache::tags([$apiResponseTag, 'api_response'])->flush();
         }
 
         try {
-            // 3. Regenera apenas caches globais pesados (all e first)
             dispatch(new RegenerateCacheJob($this, [
                 Repository::$methodAll,
                 Repository::$methodFirst,
             ]));
 
-            // 4. Atualiza as views materializadas no banco
             dispatch(new RefreshMaterializedViewsJob($this, ['auth' => auth()->user()]));
 
         } catch (\Exception $exception) {
-            Log::error("Erro ao processar limpeza de cache para {$this->getEntityClassName()}: " . $exception->getMessage());
+            Log::error("Error processing cache clearing for {$this->getEntityClassName()}: " . $exception->getMessage());
         }
     }
-
-//    public function clearCacheForEntity(string $method = '', array $parameters = []): void
-//    {
-//        if ($this->supportTag) {
-//            Cache::tags([get_class($this->entity)])->flush();
-//
-//            $apiResponseTag = str_replace('\\', '.', $this->entity);
-//            Cache::tags([$apiResponseTag])->flush();
-//            Cache::tags('api_response')->flush();
-//        }
-//
-//        try {
-//            dispatch(new RegenerateCacheJob($this, [
-//                Repository::$methodFirst,
-//                Repository::$methodAll,
-//                Repository::$methodFind,
-//                Repository::$methodFindWhere,
-//                Repository::$methodFindWhereCustom,
-//                Repository::$methodFindWhereEmail,
-//                Repository::$methodFindWhereFirst,
-//                Repository::$methodDataTable,
-//                Repository::$methodOrder,
-//            ], $parameters));
-//
-//            //refresh views
-//
-//            dispatch(new RefreshMaterializedViewsJob($this, ['auth' => auth()->user()]));
-//        } catch (\Exception $exception) {
-//
-//        }
-//
-//        $this->clearParameterizedCaches($method, $parameters);
-//    }
 
     private function clearParameterizedCaches(string $method, array $parameters): void
     {

@@ -55,14 +55,7 @@ abstract class BaseRepository implements RepositoryInterface
 
     public function Trashed(): bool
     {
-        try {
-            if ($this->hasContainsSoftDelete) {
-                return $this->permission;
-            }
-            return false;
-        } catch (\Exception|RuntimeException|\Throwable $e) {
-            return false;
-        }
+        return $this->hasContainsSoftDelete && $this->permission;
     }
 
     public function containsSoftDelete(): bool
@@ -73,10 +66,16 @@ abstract class BaseRepository implements RepositoryInterface
     private function getQualifyTagCache(string $method, array $parameters = []): string
     {
         $entityClass = $this->getEntityClassName();
-        $paramsHash = !empty($parameters) ? ':' . md5(json_encode($parameters)) : '';
-        if (!empty($this->tags)) $paramsHash .= ':ctx:' . md5(json_encode($this->tags));
 
+        $queryState = [
+            'params' => $parameters,
+            'with'   => $this->relationships,
+            'tags'   => $this->tags
+        ];
+
+        $paramsHash = ':' . md5(json_encode($queryState));
         $name = "repo:{$entityClass}:{$method}{$paramsHash}";
+
         if ($this->Trashed()) $name .= ':trashed';
         return $name;
     }
@@ -146,9 +145,10 @@ abstract class BaseRepository implements RepositoryInterface
 
     public function first()
     {
-        if ($this->activeView) {
+        if ($this->shouldUseView()) {
             return collect(DB::table($this->activeView)->first());
         }
+
         return $this->rememberCache(function () {
             return $this->applySoftDeletes($this->entity)->first();
         }, Repository::$methodFirst);
@@ -156,9 +156,10 @@ abstract class BaseRepository implements RepositoryInterface
 
     public function get()
     {
-        if ($this->activeView) {
+        if ($this->shouldUseView()) {
             return collect(DB::table($this->activeView)->get());
         }
+
         return $this->rememberCache(function () {
             return $this->applySoftDeletes($this->entity)->get();
         }, Repository::$methodAll);
@@ -272,7 +273,7 @@ abstract class BaseRepository implements RepositoryInterface
     public function findWhereFirst($column, $valor)
     {
 
-        if ($this->activeView) {
+        if ($this->shouldUseView()) {
             return collect(DB::table($this->activeView)->where($column, $valor)->first());
         }
 
@@ -367,12 +368,12 @@ abstract class BaseRepository implements RepositoryInterface
         $formattedColumns = array_map(function ($col) {
             if (str_contains($col, '.')) {
                 $parts = explode('.', $col);
-                $tableColumn = $parts[0];
-                $jsonKey = $parts[1];
+                // Sanitiza os nomes de tabela e chave para evitar injection
+                $tableColumn = preg_replace('/[^a-z0-9_]/i', '', $parts[0]);
+                $jsonKey = preg_replace('/[^a-z0-9_]/i', '', $parts[1]);
 
                 return DB::raw("\"{$tableColumn}\"->>'{$jsonKey}' as \"{$col}\"");
             }
-
             return $col;
         }, $columns);
 
@@ -393,16 +394,18 @@ abstract class BaseRepository implements RepositoryInterface
         $request = request();
         $perPage = $request->get('pagesize', $totalPage);
         $search = $request->get('search');
-
         $searchableFields = $request->get('searchable_fields', []);
 
-        $query = $this->applySoftDeletes($this->entity);
+
+        $query = $this->shouldUseView()
+            ? DB::table($this->activeView)
+            : $this->applySoftDeletes($this->entity);
 
         if (!empty(trim($search)) && !empty($searchableFields)) {
-
-            $query = $query->where(function ($mainQuery) use ($search, $searchableFields) {
+            $query->where(function ($mainQuery) use ($search, $searchableFields) {
                 foreach ($searchableFields as $index => $field) {
-                    $dbField = str_replace('.', '->', $field);
+
+                    $dbField = str_replace('.', '->>', $field);
 
                     if ($index === 0) {
                         $mainQuery->where($dbField, 'ILIKE', "%{$search}%");
@@ -413,9 +416,9 @@ abstract class BaseRepository implements RepositoryInterface
             });
         }
 
-        $sortColumn = str_replace('.', '->', $request->get('sort_column', 'id'));
+        $sortColumn = str_replace('.', '->>', $request->get('sort_column', 'id'));
         $sortDirection = $request->get('sort_direction', 'asc');
-        $query = $query->orderBy($sortColumn, $sortDirection);
+        $query->orderBy($sortColumn, $sortDirection);
 
         $data = $query->paginate($perPage);
 
@@ -469,7 +472,7 @@ abstract class BaseRepository implements RepositoryInterface
         return $this;
     }
 
-    public function useTrashed(string|bool $permission): static
+    public function useTrashed(bool $permission): static
     {
         $this->permission = $permission;
         return $this;
@@ -504,6 +507,7 @@ abstract class BaseRepository implements RepositoryInterface
         try {
 
             DB::statement("CREATE MATERIALIZED VIEW {$view} AS {$query}");
+
             DB::table('materialized_views')->updateOrInsert(
                 ['name' => $view],
                 [
@@ -568,5 +572,13 @@ abstract class BaseRepository implements RepositoryInterface
     {
         $this->activeView = $view;
         return $this;
+    }
+
+    /**
+     * Determina se a View Materializada deve ser utilizada na query atual.
+     */
+    private function shouldUseView(): bool
+    {
+        return $this->activeView && !$this->Trashed();
     }
 }

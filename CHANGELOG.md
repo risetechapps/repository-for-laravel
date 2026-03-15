@@ -3,6 +3,9 @@
 Todas as alterações notáveis neste projeto serão documentadas neste arquivo.
 O formato é baseado em [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), e este projeto segue o [Versionamento Semântico](https://semver.org/lang/pt-BR/) (SemVer).
 
+## [2.0.0] - 2026-02-27
+- Refatorado o código e aplicado novas funcionalidades.
+
 ## [1.9.0] - 2026-02-27
 - Corrigido validação de Trashed e extendido o uso de activeView
 

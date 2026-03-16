@@ -8,7 +8,9 @@ use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use RiseTechApps\Repository\Contracts\RepositoryInterface;
+use RiseTechApps\Repository\Events\AfterRefreshAllMaterializedViewsJobEvent;
 use RiseTechApps\Repository\Events\AfterRefreshMaterializedViewsJobEvent;
+use RiseTechApps\Repository\Events\BeforeRefreshAllMaterializedViewsJobEvent;
 use RiseTechApps\Repository\Events\BeforeRefreshMaterializedViewsJobEvent;
 use RiseTechApps\Repository\Exception\NotEntityDefinedException;
 use RiseTechApps\Repository\Jobs\RefreshMaterializedViewsJob;
@@ -988,13 +990,13 @@ abstract class BaseRepository implements RepositoryInterface
 
         $views = $view ? [$view] : array_keys($this->registerViews());
 
+        event(new BeforeRefreshAllMaterializedViewsJobEvent());
+
         foreach ($views as $v) {
             try {
                 event(new BeforeRefreshMaterializedViewsJobEvent($v));
 
-                $sql = $concurrently
-                    ? "REFRESH MATERIALIZED VIEW CONCURRENTLY {$v};"
-                    : "REFRESH MATERIALIZED VIEW {$v};";
+                $sql = "REFRESH MATERIALIZED VIEW {$v};";
 
                 DB::statement($sql);
 
@@ -1008,6 +1010,8 @@ abstract class BaseRepository implements RepositoryInterface
                 Log::error("Erro ao refresh da materialized view [{$v}]: " . $e->getMessage());
             }
         }
+
+        event(new AfterRefreshAllMaterializedViewsJobEvent());
     }
 
     public function cleanMaterializedView(): void

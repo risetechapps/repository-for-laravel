@@ -3,6 +3,9 @@
 Todas as alterações notáveis neste projeto serão documentadas neste arquivo.
 O formato é baseado em [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), e este projeto segue o [Versionamento Semântico](https://semver.org/lang/pt-BR/) (SemVer).
 
+## [2.4.0] - 2026-03-21
+- Implementado verificação se materialized existe antes de ser usado
+
 ## [2.3.0] - 2026-03-21
 - Corrigido currentBuilder
 

@@ -413,7 +413,7 @@ abstract class BaseRepository implements RepositoryInterface
      */
     public function latest(string $column = 'created_at'): static
     {
-        $this->entity = $this->entity->latest($column);
+        $this->currentBuilder  = $this->newQuery()->latest($column);
         return $this;
     }
 
@@ -426,7 +426,7 @@ abstract class BaseRepository implements RepositoryInterface
      */
     public function oldest(string $column = 'created_at'): static
     {
-        $this->entity = $this->entity->oldest($column);
+        $this->currentBuilder  = $this->newQuery()->oldest($column);
         return $this;
     }
 
@@ -440,7 +440,7 @@ abstract class BaseRepository implements RepositoryInterface
      */
     public function withCount(string|array $relations): static
     {
-        $this->entity = $this->entity->withCount($relations);
+        $this->currentBuilder  = $this->newQuery()->withCount($relations);
         return $this;
     }
 
@@ -540,7 +540,7 @@ abstract class BaseRepository implements RepositoryInterface
 
     public function store(array $data)
     {
-        $created = $this->entity->create($data);
+        $created = $this->newQuery()->create($data);
         $this->clearCacheForEntity();
         return $created;
     }
@@ -567,7 +567,7 @@ abstract class BaseRepository implements RepositoryInterface
         if ($useEloquent) {
             $created = [];
             foreach ($records as $data) {
-                $created[] = $this->entity->create($data);
+                $created[] = $this->newQuery()->create($data);
             }
             $this->clearCacheForEntity();
             return $created;
@@ -579,7 +579,7 @@ abstract class BaseRepository implements RepositoryInterface
             $record
         ), $records);
 
-        $result = $this->entity->insert($records);
+        $result = $this->newQuery()->insert($records);
         $this->clearCacheForEntity();
 
         return $result;
@@ -591,7 +591,7 @@ abstract class BaseRepository implements RepositoryInterface
      */
     public function update($id, array $data)
     {
-        $model = $this->entity->newQuery()->find($id);
+        $model = $this->newQuery()->newQuery()->find($id);
 
         if (!$model) {
             return false;
@@ -616,7 +616,7 @@ abstract class BaseRepository implements RepositoryInterface
      */
     public function updateMany(array $data, array $conditions): int
     {
-        $query = $this->entity->newQuery();
+        $query = $this->newQuery()->newQuery();
 
         foreach ($conditions as $column => $value) {
             $query->where($column, $value);
@@ -633,7 +633,7 @@ abstract class BaseRepository implements RepositoryInterface
      */
     public function createOrUpdate($id, array $data)
     {
-        $existing = $this->entity->newQuery()->find($id);
+        $existing = $this->newQuery()->find($id);
 
         if ($existing === null) {
             return $this->store($data);
@@ -669,7 +669,7 @@ abstract class BaseRepository implements RepositoryInterface
 
     public function delete(): bool
     {
-        $model = $this->entity->find($this->id);
+        $model = $this->newQuery()->find($this->id);
 
         if (!$model) return false;
 
@@ -685,7 +685,7 @@ abstract class BaseRepository implements RepositoryInterface
 
     public function restore(): bool
     {
-        $model = $this->entity->withTrashed(true)->find($this->id);
+        $model = $this->newQuery()->withTrashed(true)->find($this->id);
 
         if (!$model) return false;
 
@@ -701,7 +701,7 @@ abstract class BaseRepository implements RepositoryInterface
 
     public function forceDelete(): bool
     {
-        $model = $this->entity->withTrashed(true)->find($this->id);
+        $model = $this->newQuery()->withTrashed(true)->find($this->id);
 
         if (!$model) return false;
 
@@ -807,7 +807,7 @@ abstract class BaseRepository implements RepositoryInterface
             $formattedColumns[] = 'id';
         }
 
-        $this->entity = $this->entity->select($formattedColumns);
+        $this->currentBuilder  = $this->newQuery()->select($formattedColumns);
 
         return $this;
     }
@@ -826,7 +826,7 @@ abstract class BaseRepository implements RepositoryInterface
             }
         }
 
-        $this->entity = $this->entity->with($this->relationships);
+        $this->currentBuilder  = $this->newQuery()->with($this->relationships);
 
         return $this;
     }

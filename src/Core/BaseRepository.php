@@ -90,6 +90,7 @@ abstract class BaseRepository implements RepositoryInterface
         return collect(class_uses_recursive($this->entity()))->contains(SoftDeletes::class);
     }
 
+
     // =========================================================================
     // RESET DE ESCOPO — evita state leak entre chamadas no mesmo ciclo de vida
     // =========================================================================
@@ -1040,6 +1041,21 @@ abstract class BaseRepository implements RepositoryInterface
     public function useMaterializedView(string $view): static
     {
         $this->activeView = $view;
+
+        // Garante que a view existe antes de qualquer consulta.
+        // Se não existir, cria automaticamente usando o SQL de registerViews().
+        // Evita falhas quando a view ainda não foi criada pelo scheduler
+        // ou quando o banco foi recriado em ambientes de desenvolvimento.
+        if (!$this->materializedViewExists($view)) {
+            $views = $this->registerViews();
+
+            if (isset($views[$view])) {
+                $this->createSingleMaterializedView($view, $views[$view]);
+            } else {
+                Log::warning("useMaterializedView: view [{$view}] não encontrada em registerViews(). A query pode falhar.");
+            }
+        }
+
         return $this;
     }
 

@@ -3,6 +3,9 @@
 Todas as alterações notáveis neste projeto serão documentadas neste arquivo.
 O formato é baseado em [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), e este projeto segue o [Versionamento Semântico](https://semver.org/lang/pt-BR/) (SemVer).
 
+## [2.3.0] - 2026-03-21
+- Corrigido currentBuilder
+
 ## [2.2.0] - 2026-03-21
 - Refatorado classe para ter carregamento posterior de inicialização de providers
 - 

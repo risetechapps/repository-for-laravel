@@ -17,6 +17,8 @@ use RiseTechApps\Repository\Exception\NotEntityDefinedException;
 use RiseTechApps\Repository\Jobs\RefreshMaterializedViewsJob;
 use RiseTechApps\Repository\Jobs\RegenerateCacheJob;
 use RiseTechApps\Repository\Repository;
+use RiseTechApps\Tenancy\Enums\SharingPolicy;
+use RiseTechApps\Tenancy\Models\SubTenant\SubTenant;
 
 abstract class BaseRepository implements RepositoryInterface
 {
@@ -275,7 +277,7 @@ abstract class BaseRepository implements RepositoryInterface
     public function first()
     {
         if ($this->shouldUseView()) {
-            $result = DB::table($this->activeView)->first();
+            $result = $this->viewQuery()->first();
             $this->resetScope();
             return collect($result);
         }
@@ -291,7 +293,7 @@ abstract class BaseRepository implements RepositoryInterface
     public function get()
     {
         if ($this->shouldUseView()) {
-            $result = DB::table($this->activeView)->get();
+            $result = $this->viewQuery()->get();
             $this->resetScope();
             return collect($result);
         }
@@ -358,7 +360,7 @@ abstract class BaseRepository implements RepositoryInterface
     public function findWhereFirst($column, $valor)
     {
         if ($this->shouldUseView()) {
-            $result = DB::table($this->activeView)->where($column, $valor)->first();
+            $result = $this->viewQuery()->where($column, $valor)->first();
             $this->resetScope();
             return collect($result);
         }
@@ -411,7 +413,7 @@ abstract class BaseRepository implements RepositoryInterface
      */
     public function latest(string $column = 'created_at'): static
     {
-        $this->entityClass = $this->newQuery()->latest($column);
+        $this->entity = $this->entity->latest($column);
         return $this;
     }
 
@@ -424,7 +426,7 @@ abstract class BaseRepository implements RepositoryInterface
      */
     public function oldest(string $column = 'created_at'): static
     {
-        $this->entityClass = $this->newQuery()->oldest($column);
+        $this->entity = $this->entity->oldest($column);
         return $this;
     }
 
@@ -438,7 +440,7 @@ abstract class BaseRepository implements RepositoryInterface
      */
     public function withCount(string|array $relations): static
     {
-        $this->entityClass = $this->newQuery()->withCount($relations);
+        $this->entity = $this->entity->withCount($relations);
         return $this;
     }
 
@@ -482,7 +484,7 @@ abstract class BaseRepository implements RepositoryInterface
         $searchableFields = $request->get('searchable_fields', []);
 
         $query = $this->shouldUseView()
-            ? DB::table($this->activeView)
+            ? $this->viewQuery()
             : $this->newQuery();
 
         if (!empty(trim($search ?? '')) && !empty($searchableFields)) {
@@ -538,7 +540,7 @@ abstract class BaseRepository implements RepositoryInterface
 
     public function store(array $data)
     {
-        $created = $this->newQuery()->create($data);
+        $created = $this->entity->create($data);
         $this->clearCacheForEntity();
         return $created;
     }
@@ -565,7 +567,7 @@ abstract class BaseRepository implements RepositoryInterface
         if ($useEloquent) {
             $created = [];
             foreach ($records as $data) {
-                $created[] = $this->newQuery()->create($data);
+                $created[] = $this->entity->create($data);
             }
             $this->clearCacheForEntity();
             return $created;
@@ -577,7 +579,7 @@ abstract class BaseRepository implements RepositoryInterface
             $record
         ), $records);
 
-        $result = $this->newQuery()->insert($records);
+        $result = $this->entity->insert($records);
         $this->clearCacheForEntity();
 
         return $result;
@@ -589,7 +591,7 @@ abstract class BaseRepository implements RepositoryInterface
      */
     public function update($id, array $data)
     {
-        $model = $this->newQuery()->find($id);
+        $model = $this->entity->newQuery()->find($id);
 
         if (!$model) {
             return false;
@@ -614,7 +616,7 @@ abstract class BaseRepository implements RepositoryInterface
      */
     public function updateMany(array $data, array $conditions): int
     {
-        $query = $this->newQuery();
+        $query = $this->entity->newQuery();
 
         foreach ($conditions as $column => $value) {
             $query->where($column, $value);
@@ -631,7 +633,7 @@ abstract class BaseRepository implements RepositoryInterface
      */
     public function createOrUpdate($id, array $data)
     {
-        $existing = $this->newQuery()->find($id);
+        $existing = $this->entity->newQuery()->find($id);
 
         if ($existing === null) {
             return $this->store($data);
@@ -667,7 +669,7 @@ abstract class BaseRepository implements RepositoryInterface
 
     public function delete(): bool
     {
-        $model = $this->newQuery()->find($this->id);
+        $model = $this->entity->find($this->id);
 
         if (!$model) return false;
 
@@ -683,7 +685,7 @@ abstract class BaseRepository implements RepositoryInterface
 
     public function restore(): bool
     {
-        $model = $this->newQuery()->withTrashed(true)->find($this->id);
+        $model = $this->entity->withTrashed(true)->find($this->id);
 
         if (!$model) return false;
 
@@ -699,7 +701,7 @@ abstract class BaseRepository implements RepositoryInterface
 
     public function forceDelete(): bool
     {
-        $model = $this->newQuery()->withTrashed(true)->find($this->id);
+        $model = $this->entity->withTrashed(true)->find($this->id);
 
         if (!$model) return false;
 
@@ -805,7 +807,7 @@ abstract class BaseRepository implements RepositoryInterface
             $formattedColumns[] = 'id';
         }
 
-        $this->entityClass = $this->newQuery()->select($formattedColumns);
+        $this->entity = $this->entity->select($formattedColumns);
 
         return $this;
     }
@@ -824,7 +826,7 @@ abstract class BaseRepository implements RepositoryInterface
             }
         }
 
-        $this->entityClass = $this->newQuery()->with($this->relationships);
+        $this->entity = $this->entity->with($this->relationships);
 
         return $this;
     }
@@ -1039,6 +1041,111 @@ abstract class BaseRepository implements RepositoryInterface
     {
         $this->activeView = $view;
         return $this;
+    }
+
+    /**
+     * Retorna um query builder para a view ativa com o scope de subtenant
+     * aplicado automaticamente, baseado na SharingPolicy do model.
+     *
+     * Substitui todos os DB::table($this->activeView) diretos, garantindo
+     * que nenhuma consulta a uma view escape sem o filtro de isolamento.
+     */
+    protected function viewQuery(): \Illuminate\Database\Query\Builder
+    {
+        $query = DB::table($this->activeView);
+        return $this->applyViewScope($query);
+    }
+
+    /**
+     * Aplica o filtro de subtenant no query builder da view.
+     *
+     * Lê a SharingPolicy diretamente do model do repository —
+     * zero configuração necessária no repository filho.
+     *
+     * RESTRICTED   → WHERE sub_tenant_id = {filial_ativa}
+     * USER_FILIALS → WHERE sub_tenant_id IN {filiais_autorizadas_do_usuario}
+     * ALL_FILIALS  → WHERE sub_tenant_id IN {todas_filiais_do_tenant}
+     *
+     * Sem contexto inicializado → WHERE 1 = 0 (falha segura — retorno vazio)
+     */
+    protected function applyViewScope(
+        \Illuminate\Database\Query\Builder $query
+    ): \Illuminate\Database\Query\Builder {
+
+        // Sem subtenant inicializado → falha segura
+        if (!subTenancy()->isInitialized()) {
+            return $query->whereRaw('1 = 0');
+        }
+
+        // Lê a política do model — default RESTRICTED se não declarar
+        $model  = app($this->entityClass);
+        $policy = method_exists($model, 'sharingPolicy')
+            ? $model->sharingPolicy()
+            : SharingPolicy::RESTRICTED;
+
+        return match ($policy) {
+            SharingPolicy::RESTRICTED   => $this->applyRestrictedViewScope($query),
+            SharingPolicy::USER_FILIALS => $this->applyUserFilialsViewScope($query),
+            SharingPolicy::ALL_FILIALS  => $this->applyAllFilialsViewScope($query),
+        };
+    }
+
+    /**
+     * RESTRICTED — filtra pela filial ativa no momento.
+     */
+    private function applyRestrictedViewScope(
+        \Illuminate\Database\Query\Builder $query
+    ): \Illuminate\Database\Query\Builder {
+        $key = subTenancy()->getKey();
+
+        if (!$key) {
+            return $query->whereRaw('1 = 0');
+        }
+
+        return $query->where('sub_tenant_id', $key);
+    }
+
+    /**
+     * USER_FILIALS — filtra pelas filiais autorizadas do usuário.
+     * Quando multi_filial está ativo, considera todas as filiais do contexto.
+     */
+    private function applyUserFilialsViewScope(
+        \Illuminate\Database\Query\Builder $query
+    ): \Illuminate\Database\Query\Builder {
+        $authorizedIds = subTenancy()->getSharedSubTenant();
+
+        if (empty($authorizedIds)) {
+            return $query->whereRaw('1 = 0');
+        }
+
+        // multi_filial ativo com múltiplas filiais → agrega via SUM
+        // (a view tem 1 linha por filial — precisamos somar)
+        if (subTenancy()->getMultiFilial() && count($authorizedIds) > 1) {
+            return $query->whereIn('sub_tenant_id', $authorizedIds);
+        }
+
+        return $query->where('sub_tenant_id', $authorizedIds[0] ?? subTenancy()->getKey());
+    }
+
+    /**
+     * ALL_FILIALS — filtra por todas as filiais do tenant.
+     */
+    private function applyAllFilialsViewScope(
+        \Illuminate\Database\Query\Builder $query
+    ): \Illuminate\Database\Query\Builder {
+        if (!tenancy()->isInitialized()) {
+            return $query->whereRaw('1 = 0');
+        }
+
+        $allIds = SubTenant::where('tenant_id', tenancy()->getKey())
+            ->pluck('id')
+            ->toArray();
+
+        if (empty($allIds)) {
+            return $query->whereRaw('1 = 0');
+        }
+
+        return $query->whereIn('sub_tenant_id', $allIds);
     }
 
     /**

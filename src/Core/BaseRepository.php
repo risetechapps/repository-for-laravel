@@ -3,6 +3,7 @@
 namespace RiseTechApps\Repository\Core;
 
 use Carbon\Carbon;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
@@ -20,8 +21,8 @@ use RiseTechApps\Repository\Repository;
 abstract class BaseRepository implements RepositoryInterface
 {
     protected ?string $activeView = null;
-
-    public $entity;
+    protected string $entityClass;
+    protected ?Builder $currentBuilder = null;
     protected Carbon $tll;
     protected $driver;
     protected bool $supportTag      = false;
@@ -61,7 +62,7 @@ abstract class BaseRepository implements RepositoryInterface
      */
     public function __construct()
     {
-        $this->entity               = $this->resolveEntity();
+        $this->entityClass           = $this->entity();
         $this->hasContainsSoftDelete = $this->containsSoftDelete();
         $this->tll                  = Carbon::now()->addHours(24);
         $this->supportTag           = $this->supportsTags();
@@ -84,7 +85,7 @@ abstract class BaseRepository implements RepositoryInterface
 
     protected function containsSoftDelete(): bool
     {
-        return collect(class_uses_recursive($this->entity))->contains(SoftDeletes::class);
+        return collect(class_uses_recursive($this->entity()))->contains(SoftDeletes::class);
     }
 
     // =========================================================================
@@ -105,9 +106,20 @@ abstract class BaseRepository implements RepositoryInterface
         $this->activeView      = null;
         $this->bypassCache     = false;
         $this->limitValue      = null;
-        $this->entity          = $this->resolveEntity();
+        $this->entityClass     = $this->entity();
+        $this->currentBuilder  = null;
     }
 
+    /**
+     * Gera uma query limpa. É aqui que o TenancyScope será chamado no momento certo.
+     */
+    protected function newQuery()
+    {
+        // Se já iniciamos um builder (via select() ou relationships()), usamos ele.
+        // Caso contrário, iniciamos um do zero.
+        $builder = $this->currentBuilder ?? app($this->entityClass)->newQuery();
+        return $this->applyQueryScope($builder);
+    }
     // =========================================================================
     // SOFT DELETE / ESCOPO
     // =========================================================================
@@ -269,7 +281,7 @@ abstract class BaseRepository implements RepositoryInterface
         }
 
         $result = $this->rememberCache(function () {
-            return $this->applyQueryScope($this->entity)->first();
+            return $this->newQuery()->first();
         }, Repository::$methodFirst);
 
         $this->resetScope();
@@ -285,7 +297,7 @@ abstract class BaseRepository implements RepositoryInterface
         }
 
         $result = $this->rememberCache(function () {
-            return $this->applyQueryScope($this->entity)->get();
+            return $this->newQuery()->get();
         }, Repository::$methodAll);
 
         $this->resetScope();
@@ -295,7 +307,7 @@ abstract class BaseRepository implements RepositoryInterface
     public function findById($id)
     {
         $result = $this->rememberCache(function () use ($id) {
-            return $this->applyQueryScope($this->entity)->find($id);
+            return $this->newQuery()->find($id);
         }, Repository::$methodFind, [$id]);
 
         $this->resetScope();
@@ -305,7 +317,7 @@ abstract class BaseRepository implements RepositoryInterface
     public function findWhere(array $conditions)
     {
         $result = $this->rememberCache(function () use ($conditions) {
-            $query = $this->applyQueryScope($this->entity);
+            $query = $this->newQuery();
 
             foreach ($conditions as $column => $value) {
                 $query = $query->where($column, $value);
@@ -320,7 +332,7 @@ abstract class BaseRepository implements RepositoryInterface
     public function findWhereCustom(array $conditions)
     {
         $result = $this->rememberCache(function () use ($conditions) {
-            $query = $this->applyQueryScope($this->entity);
+            $query = $this->newQuery();
 
             foreach ($conditions as $filter) {
                 $this->applyCustomFilter($query, $filter);
@@ -336,7 +348,7 @@ abstract class BaseRepository implements RepositoryInterface
     public function findWhereEmail($valor)
     {
         $result = $this->rememberCache(function () use ($valor) {
-            return $this->applyQueryScope($this->entity)->where('email', $valor)->get();
+            return $this->newQuery()->where('email', $valor)->get();
         }, Repository::$methodFindWhereEmail, [$valor]);
 
         $this->resetScope();
@@ -352,7 +364,7 @@ abstract class BaseRepository implements RepositoryInterface
         }
 
         $result = $this->rememberCache(function () use ($column, $valor) {
-            return $this->applyQueryScope($this->entity)->where($column, $valor)->first();
+            return $this->newQuery()->where($column, $valor)->first();
         }, Repository::$methodFindWhereFirst, [$column, $valor]);
 
         $this->resetScope();
@@ -370,7 +382,7 @@ abstract class BaseRepository implements RepositoryInterface
      */
     public function count(): int
     {
-        $result = $this->applyQueryScope($this->entity)->count();
+        $result = $this->newQuery()->count();
         $this->resetScope();
         return $result;
     }
@@ -385,7 +397,7 @@ abstract class BaseRepository implements RepositoryInterface
      */
     public function exists(): bool
     {
-        $result = $this->applyQueryScope($this->entity)->exists();
+        $result = $this->newQuery()->exists();
         $this->resetScope();
         return $result;
     }
@@ -399,7 +411,7 @@ abstract class BaseRepository implements RepositoryInterface
      */
     public function latest(string $column = 'created_at'): static
     {
-        $this->entity = $this->entity->latest($column);
+        $this->entityClass = $this->newQuery()->latest($column);
         return $this;
     }
 
@@ -412,7 +424,7 @@ abstract class BaseRepository implements RepositoryInterface
      */
     public function oldest(string $column = 'created_at'): static
     {
-        $this->entity = $this->entity->oldest($column);
+        $this->entityClass = $this->newQuery()->oldest($column);
         return $this;
     }
 
@@ -426,14 +438,14 @@ abstract class BaseRepository implements RepositoryInterface
      */
     public function withCount(string|array $relations): static
     {
-        $this->entity = $this->entity->withCount($relations);
+        $this->entityClass = $this->newQuery()->withCount($relations);
         return $this;
     }
 
     public function dataTable()
     {
         $result = $this->rememberCache(function () {
-            return $this->applyQueryScope($this->entity)->get();
+            return $this->newQuery()->get();
         }, Repository::$methodDataTable);
 
         $this->resetScope();
@@ -447,7 +459,7 @@ abstract class BaseRepository implements RepositoryInterface
         }
 
         $result = $this->rememberCache(function () use ($column, $order) {
-            return $this->applyQueryScope($this->entity)->orderBy($column, $order)->get();
+            return $this->newQuery()->orderBy($column, $order)->get();
         }, Repository::$methodOrder);
 
         $this->resetScope();
@@ -471,7 +483,7 @@ abstract class BaseRepository implements RepositoryInterface
 
         $query = $this->shouldUseView()
             ? DB::table($this->activeView)
-            : $this->applyQueryScope($this->entity);
+            : $this->newQuery();
 
         if (!empty(trim($search ?? '')) && !empty($searchableFields)) {
             $query->where(function ($mainQuery) use ($search, $searchableFields) {
@@ -526,7 +538,7 @@ abstract class BaseRepository implements RepositoryInterface
 
     public function store(array $data)
     {
-        $created = $this->entity->create($data);
+        $created = $this->newQuery()->create($data);
         $this->clearCacheForEntity();
         return $created;
     }
@@ -553,7 +565,7 @@ abstract class BaseRepository implements RepositoryInterface
         if ($useEloquent) {
             $created = [];
             foreach ($records as $data) {
-                $created[] = $this->entity->create($data);
+                $created[] = $this->newQuery()->create($data);
             }
             $this->clearCacheForEntity();
             return $created;
@@ -565,7 +577,7 @@ abstract class BaseRepository implements RepositoryInterface
             $record
         ), $records);
 
-        $result = $this->entity->insert($records);
+        $result = $this->newQuery()->insert($records);
         $this->clearCacheForEntity();
 
         return $result;
@@ -577,7 +589,7 @@ abstract class BaseRepository implements RepositoryInterface
      */
     public function update($id, array $data)
     {
-        $model = $this->entity->newQuery()->find($id);
+        $model = $this->newQuery()->find($id);
 
         if (!$model) {
             return false;
@@ -602,7 +614,7 @@ abstract class BaseRepository implements RepositoryInterface
      */
     public function updateMany(array $data, array $conditions): int
     {
-        $query = $this->entity->newQuery();
+        $query = $this->newQuery();
 
         foreach ($conditions as $column => $value) {
             $query->where($column, $value);
@@ -619,7 +631,7 @@ abstract class BaseRepository implements RepositoryInterface
      */
     public function createOrUpdate($id, array $data)
     {
-        $existing = $this->entity->newQuery()->find($id);
+        $existing = $this->newQuery()->find($id);
 
         if ($existing === null) {
             return $this->store($data);
@@ -644,7 +656,7 @@ abstract class BaseRepository implements RepositoryInterface
      */
     public function chunk(int $size, callable $callback): bool
     {
-        $result = $this->applyQueryScope($this->entity)->chunk($size, $callback);
+        $result = $this->newQuery()->chunk($size, $callback);
         $this->resetScope();
         return $result;
     }
@@ -655,7 +667,7 @@ abstract class BaseRepository implements RepositoryInterface
 
     public function delete(): bool
     {
-        $model = $this->entity->find($this->id);
+        $model = $this->newQuery()->find($this->id);
 
         if (!$model) return false;
 
@@ -671,7 +683,7 @@ abstract class BaseRepository implements RepositoryInterface
 
     public function restore(): bool
     {
-        $model = $this->entity->withTrashed(true)->find($this->id);
+        $model = $this->newQuery()->withTrashed(true)->find($this->id);
 
         if (!$model) return false;
 
@@ -687,7 +699,7 @@ abstract class BaseRepository implements RepositoryInterface
 
     public function forceDelete(): bool
     {
-        $model = $this->entity->withTrashed(true)->find($this->id);
+        $model = $this->newQuery()->withTrashed(true)->find($this->id);
 
         if (!$model) return false;
 
@@ -793,7 +805,7 @@ abstract class BaseRepository implements RepositoryInterface
             $formattedColumns[] = 'id';
         }
 
-        $this->entity = $this->entity->select($formattedColumns);
+        $this->entityClass = $this->newQuery()->select($formattedColumns);
 
         return $this;
     }
@@ -812,7 +824,7 @@ abstract class BaseRepository implements RepositoryInterface
             }
         }
 
-        $this->entity = $this->entity->with($this->relationships);
+        $this->entityClass = $this->newQuery()->with($this->relationships);
 
         return $this;
     }
@@ -869,7 +881,7 @@ abstract class BaseRepository implements RepositoryInterface
      */
     public function pluck(string $column, ?string $key = null)
     {
-        $query = $this->applyQueryScope($this->entity);
+        $query = $this->newQuery();
 
         $result = $key
             ? $query->pluck($column, $key)
@@ -889,7 +901,7 @@ abstract class BaseRepository implements RepositoryInterface
      */
     public function sum(string $column): int|float
     {
-        $result = $this->applyQueryScope($this->entity)->sum($column);
+        $result = $this->newQuery()->sum($column);
         $this->resetScope();
         return $result;
     }
@@ -904,7 +916,7 @@ abstract class BaseRepository implements RepositoryInterface
      */
     public function avg(string $column): int|float|null
     {
-        $result = $this->applyQueryScope($this->entity)->avg($column);
+        $result = $this->newQuery()->avg($column);
         $this->resetScope();
         return $result;
     }
@@ -919,7 +931,7 @@ abstract class BaseRepository implements RepositoryInterface
      */
     public function min(string $column): mixed
     {
-        $result = $this->applyQueryScope($this->entity)->min($column);
+        $result = $this->newQuery()->min($column);
         $this->resetScope();
         return $result;
     }
@@ -934,7 +946,7 @@ abstract class BaseRepository implements RepositoryInterface
      */
     public function max(string $column): mixed
     {
-        $result = $this->applyQueryScope($this->entity)->max($column);
+        $result = $this->newQuery()->max($column);
         $this->resetScope();
         return $result;
     }

@@ -31,11 +31,9 @@ class RegenerateCacheJob implements ShouldQueue
             $this->repository->rememberCache(function () use ($method) {
                 switch ($method) {
                     case Repository::$methodFind:
-                        return $this->repository->entity->find($this->parameters[0] ?? null);
-                    case Repository::$methodFindWhere:
-                        return $this->repository->entity->where($this->parameters[0] ?? null, $this->parameters[1] ?? null)->get();
+                        return $this->repository->find($this->parameters[0] ?? null);
                     case Repository::$methodAll:
-                        return $this->repository->entity->all();
+                        return $this->repository->get();
                 }
             }, $method, $this->parameters);
         }

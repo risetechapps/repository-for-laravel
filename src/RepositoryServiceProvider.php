@@ -8,6 +8,7 @@ use RiseTechApps\Repository\Commands\GenerateRepositoryCommand;
 use RiseTechApps\Repository\Commands\RepositoryClearCacheCommand;
 use RiseTechApps\Repository\Commands\RepositoryRefreshMaterializedViewsCommand;
 use RiseTechApps\Repository\Commands\RepositoryRestartMaterializedViewsCommand;
+use RiseTechApps\Repository\Commands\RepositoryWarmCacheCommand;
 use RiseTechApps\Repository\Http\Middleware\CacheApiResponse;
 
 class RepositoryServiceProvider extends ServiceProvider
@@ -31,6 +32,7 @@ class RepositoryServiceProvider extends ServiceProvider
             RepositoryRefreshMaterializedViewsCommand::class,
             RepositoryClearCacheCommand::class,
             RepositoryRestartMaterializedViewsCommand::class,
+            RepositoryWarmCacheCommand::class,
         ]);
 
         if (!Str::hasMacro('qualifyTagCacheResponse')) {

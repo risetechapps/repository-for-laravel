@@ -18,6 +18,7 @@ class Repository
     public static string $methodFindWhereFirst = 'FIND_WHERE_FIRST';
     public static string $methodDataTable = 'DATATABLE';
     public static string $methodOrder = 'ORDER';
+    public static string $methodPaginate = 'PAGINATE';
     public static array $tagsCache = [];
 
     public static function setTagsCache(string $tag): void

@@ -6,6 +6,40 @@ O **Laravel Repository** é um package para Laravel que abstrai a camada de dado
 
 ---
 
+## ✨ Funcionalidades Principais
+
+- 🗂️ **Cache Inteligente** - Cache automático com TTL configurável, tags e invalidação
+- 🔄 **Soft Deletes** - `useTrashed()`, `onlyTrashed()`, `restore()` e `forceDelete()`
+- 📊 **Materialized Views** - Suporte nativo a views materializadas do PostgreSQL
+- 🔍 **Buscas Avançadas** - Filtros customizados, full-text, fuzzy search, JSONB
+- 📦 **Operações em Lote** - `storeMany`, `updateMany`, `deleteMany`, `upsert`
+- ⚡ **Performance** - Cursor pagination, selects otimizados, cache warming
+- 🔔 **Eventos** - Eventos para create/update/delete com listeners configuráveis
+- 🛡️ **Segurança** - Sanitização automática, validação de operadores, SQL injection protection
+- 📈 **Métricas** - Query logging, cache hit rate, estatísticas de uso
+
+---
+
+## 📋 Novidades (v2.6.0)
+
+### Novos Métodos
+- `firstOrCreate()` / `updateOrCreate()` - Busca ou cria/atualiza
+- `duplicate()` - Clona registros com modificações
+- `increment()` / `decrement()` - Operações atômicas
+- `whereDate()` / `whereIn()` / `whereBetween()` / `groupBy()` - Filtros avançados
+- `view()` - Query Builder para Materialized Views
+- `cacheFor()` / `cacheIf()` / `withCacheTags()` - Cache avançado
+- `when()` / `selectOptimized()` / `cursorPaginate()` - Performance
+
+### Melhorias
+- Eventos do Repository (`RepositoryCreated`, `RepositoryUpdated`, etc.)
+- Validação de operadores em `findWhereCustom`
+- Cache automático em Materialized Views
+- Serialização segura nos Jobs
+- Configuração expandida em `config/repository.php`
+
+---
+
 ## 🚀 Instalação
 
 ### Requisitos
@@ -180,6 +214,82 @@ $clientRepository->findWhereCustom([
         ['column' => 'ativo',    'operator' => '=', 'value' => true],
     ]],
 ]);
+```
+
+---
+
+#### `whereDate($column, $operator, $value)`
+Filtra registros por data. Suporta operadores de comparação.
+
+```php
+// Registros criados em 2024
+$clients = $clientRepository->whereDate('created_at', '>=', '2024-01-01')->get();
+
+// Pedidos de hoje
+$todayOrders = $orderRepository->whereDate('created_at', '=', now()->format('Y-m-d'))->get();
+
+// Registros do mês passado
+$lastMonth = $clientRepository->whereDate('created_at', '>=', now()->subMonth())->get();
+```
+
+---
+
+#### `whereIn($column, array $values)`
+Filtra registros onde a coluna está nos valores informados.
+
+```php
+// Status específicos
+$clients = $clientRepository->whereIn('status', ['ativo', 'pendente'])->get();
+
+// IDs específicos
+$selected = $clientRepository->whereIn('id', [1, 2, 3, 4, 5])->get();
+
+// Com encadeamento
+$recentActive = $clientRepository
+    ->whereIn('status', ['ativo', 'premium'])
+    ->whereDate('created_at', '>=', now()->subDays(30))
+    ->get();
+```
+
+---
+
+#### `whereBetween($column, array $values)`
+Filtra registros onde a coluna está entre dois valores.
+
+```php
+// Faixa de valores
+$midRange = $orderRepository->whereBetween('valor', [100, 500])->get();
+
+// Período de datas
+$inPeriod = $clientRepository->whereBetween('created_at', [
+    '2024-01-01',
+    '2024-12-31'
+])->get();
+
+// Preço com desconto
+$discounted = $productRepository->whereBetween('discount_percentage', [10, 50])->get();
+```
+
+---
+
+#### `groupBy($columns)`
+Agrupa resultados por coluna(s). Útil para consultas agregadas.
+
+```php
+// Agrupar por status
+$byStatus = $clientRepository->select(['status', DB::raw('COUNT(*) as total')])
+    ->groupBy('status')
+    ->get();
+
+// Agrupar por mês
+$byMonth = $orderRepository
+    ->select([
+        DB::raw("DATE_TRUNC('month', created_at) as month"),
+        DB::raw('SUM(valor) as total'),
+        DB::raw('COUNT(*) as quantity')
+    ])
+    ->groupBy(DB::raw("DATE_TRUNC('month', created_at)"))
+    ->get();
 ```
 
 ---
@@ -404,6 +514,44 @@ $clientRepository->setTags(['empresa:5'])->get();
 
 ---
 
+#### `whereDate($column, $operator, $value)`
+Filtra por data. Encadeável com outros métodos.
+
+```php
+$recent = $clientRepository->latest()->whereDate('created_at', '>=', '2024-01-01')->get();
+```
+
+---
+
+#### `whereIn($column, array $values)`
+Filtra por múltiplos valores. Encadeável.
+
+```php
+$selected = $clientRepository->whereIn('status', ['ativo', 'premium'])->limit(10)->get();
+```
+
+---
+
+#### `whereBetween($column, array $values)`
+Filtra por faixa de valores. Encadeável.
+
+```php
+$midRange = $orderRepository->whereBetween('valor', [100, 500])->get();
+```
+
+---
+
+#### `groupBy($columns)`
+Agrupa resultados. Encadeável com agregações.
+
+```php
+$summary = $repository->select(['status', DB::raw('COUNT(*) as total')])
+    ->groupBy('status')
+    ->get();
+```
+
+---
+
 ### Paginação
 
 ---
@@ -562,6 +710,92 @@ Cria um novo registro se o ID não existir, ou atualiza se existir. A verificaç
 ```php
 $clientRepository->createOrUpdate(1, ['nome' => 'João']);   // atualiza
 $clientRepository->createOrUpdate(99, ['nome' => 'Maria']); // cria
+```
+
+---
+
+#### `firstOrCreate(array $attributes, array $values = [])`
+Retorna o primeiro registro que corresponda aos atributos, ou cria um novo.
+
+```php
+// Busca por email, cria se não existir
+$client = $clientRepository->firstOrCreate(
+    ['email' => 'joao@email.com'],
+    ['nome' => 'João', 'telefone' => '1199999999']
+);
+
+// Equivalente a:
+// $client = Client::where('email', 'joao@email.com')->first() ?? Client::create([...])
+```
+
+---
+
+#### `updateOrCreate(array $attributes, array $values = [])`
+Atualiza um registro existente ou cria um novo.
+
+```php
+// Atualiza se email existe, senão cria
+$client = $clientRepository->updateOrCreate(
+    ['email' => 'joao@email.com'],
+    ['nome' => 'João Silva', 'telefone' => '11988888888']
+);
+
+// Equivalente a:
+// $client = Client::updateOrCreate(['email' => ...], ['nome' => ...])
+```
+
+---
+
+#### `duplicate($id, array $modifications = [])`
+Duplica um registro existente com modificações opcionais.
+
+```php
+// Duplica o cliente 1
+$newClient = $clientRepository->duplicate(1);
+
+// Duplica com modificações
+$newClient = $clientRepository->duplicate(1, [
+    'nome' => 'Cópia do Cliente',
+    'email' => 'copia@email.com'
+]);
+
+// IDs e timestamps são automaticamente removidos
+```
+
+---
+
+#### `increment($id, $column, $amount = 1)`
+Incrementa uma coluna numericamente (operação atômica).
+
+```php
+// +1 na coluna visitas
+$clientRepository->increment(1, 'visitas');
+
+// +5 na coluna pontos
+$clientRepository->increment(1, 'pontos', 5);
+
+// Útil para contadores: views, likes, downloads
+$productRepository->increment($productId, 'view_count');
+```
+
+---
+
+#### `decrement($id, $column, $amount = 1)`
+Decrementa uma coluna numericamente (operação atômica).
+
+```php
+// -1 no estoque
+$productRepository->decrement(1, 'stock');
+
+// -5 no estoque
+$productRepository->decrement(1, 'stock', 5);
+
+// Útil para controle de estoque
+if ($productRepository->decrement($id, 'quantity', $amount)) {
+    // Estoque decrementado com sucesso
+} else {
+    // Produto não encontrado
+}
 ```
 
 ---
@@ -746,6 +980,228 @@ Sinta-se à vontade para contribuir! Basta seguir estes passos:
 ## 📜 Licença
 
 Este projeto é distribuído sob a licença MIT. Veja o arquivo [LICENSE](LICENSE) para mais detalhes.
+
+---
+
+---
+
+## 📊 Materialized Views (PostgreSQL)
+
+As Materialized Views permitem pré-calcular e cachear consultas complexas diretamente no PostgreSQL, com refresh controlado pela aplicação e cache adicional na camada de aplicação.
+
+### ⚙️ Requisitos
+
+- **PostgreSQL** 12+ (para suporte completo a Materialized Views)
+- Extensão `pg_trgm` para fuzzy search (opcional)
+- Driver de cache que suporte **tags** (Redis ou Memcached) recomendado
+
+### 📝 Exemplo Completo
+
+#### 1. Definindo a View no Repository
+
+**Forma Recomendada (Query Builder):**
+
+```php
+class RelatorioVendasRepository extends BaseRepository
+{
+    public function entity(): string
+    {
+        return Pedido::class;
+    }
+
+    /**
+     * Registra as views materializadas usando Query Builder.
+     * Mais seguro, com autocomplete do IDE e type safety.
+     */
+    protected function registerViews(): array
+    {
+        return [
+            // Usando Query Builder ✅
+            $this->view('vw_vendas_por_cliente', function ($query) {
+                return $query->select([
+                        'cliente_id',
+                        DB::raw('COUNT(*) as total_pedidos'),
+                        DB::raw('SUM(valor) as faturamento_total'),
+                        DB::raw('MIN(valor) as menor_pedido'),
+                        DB::raw('MAX(valor) as maior_pedido'),
+                        DB::raw('AVG(valor) as ticket_medio'),
+                    ])
+                    ->whereNull('deleted_at')
+                    ->groupBy('cliente_id');
+            }),
+
+            // Com joins
+            $this->view('vw_pedidos_com_cliente', function ($query) {
+                return $query
+                    ->select([
+                        'pedidos.*',
+                        'clientes.nome as cliente_nome',
+                        'clientes.email as cliente_email',
+                    ])
+                    ->join('clientes', 'pedidos.cliente_id', '=', 'clientes.id')
+                    ->whereNull('pedidos.deleted_at');
+            }),
+
+            // Também suporta SQL string (legado) ⚠️
+            // 'vw_outra_view' => 'SELECT * FROM pedidos WHERE status = \'ativo\'',
+        ];
+    }
+}
+```
+
+**Vantagens do Query Builder:**
+- ✅ **Autocompleto** do IDE para colunas e métodos
+- ✅ **Type safety** - Erros detectados em tempo de compilação
+- ✅ **Escapamento automático** - Proteção contra SQL injection
+- ✅ **Fácil manutenção** - Refatoração segura
+- ✅ **Portabilidade** - Funciona com diferentes drivers de banco
+```
+
+#### 2. Usando a View Materializada
+
+```php
+$repository = app(RelatorioVendasRepository::class);
+
+// Cria a view automaticamente se não existir
+$repository->createMaterializedViews();
+
+// Usa a view para consultas (cacheado)
+$vendasPorCliente = $repository
+    ->useMaterializedView('vw_vendas_por_cliente')
+    ->get();
+
+// Busca específica na view
+$cliente = $repository
+    ->useMaterializedView('vw_vendas_por_cliente')
+    ->findWhereFirst('cliente_id', 123);
+
+// Paginação com cache
+$paginado = $repository
+    ->useMaterializedView('vw_vendas_por_cliente')
+    ->orderBy('faturamento_total', 'DESC')
+    ->paginate(20);
+```
+
+#### 3. Atualizando a View (Refresh)
+
+```php
+// Refresh de todas as views registradas
+$repository->refreshMaterializedViews();
+
+// Refresh de uma view específica
+$repository->refreshMaterializedViews('vw_vendas_por_cliente');
+
+// Refresh sem CONCURRENTLY (útil na primeira vez ou sem índice único)
+$repository->refreshMaterializedViews(concurrently: false);
+```
+
+#### 4. Schedule Automático
+
+Adicione ao `routes/console.php` ou `App\Console\Kernel.php`:
+
+```php
+use Illuminate\Support\Facades\Schedule;
+use App\Repositories\RelatorioVendasRepository;
+
+// Atualiza a view a cada hora
+Schedule::call(function () {
+    app(RelatorioVendasRepository::class)->refreshMaterializedViews();
+})->hourly();
+
+// Ou use o comando Artisan
+Schedule::command('repository:refresh-materialized-views RelatorioVendas')->hourly();
+```
+
+#### 5. Comando Artisan
+
+```bash
+# Cria as views se não existirem
+php artisan repository:create-materialized-views RelatorioVendasRepository
+
+# Atualiza as views
+php artisan repository:refresh-materialized-views RelatorioVendasRepository
+
+# Remove e recria as views
+php artisan repository:restart-materialized-views RelatorioVendasRepository
+```
+
+### 🔄 Eventos de Refresh
+
+O package dispara eventos durante o refresh:
+
+```php
+// Antes de atualizar qualquer view
+Event::listen(\RiseTechApps\Repository\Events\BeforeRefreshAllMaterializedViewsJobEvent::class, function () {
+    Log::info('Iniciando refresh de todas as views...');
+});
+
+// Antes de cada view
+Event::listen(\RiseTechApps\Repository\Events\BeforeRefreshMaterializedViewsJobEvent::class, function ($event) {
+    Log::info("Atualizando view: {$event->viewName}");
+});
+
+// Depois de cada view
+Event::listen(\RiseTechApps\Repository\Events\AfterRefreshMaterializedViewsJobEvent::class, function ($event) {
+    Log::info("View atualizada: {$event->viewName}");
+});
+
+// Depois de todas
+Event::listen(\RiseTechApps\Repository\Events\AfterRefreshAllMaterializedViewsJobEvent::class, function () {
+    Log::info('Todas as views foram atualizadas');
+});
+```
+
+### 📈 Performance
+
+**Sem Materialized View:**
+```
+Query: SELECT ... GROUP BY cliente_id (tabela com 1M registros)
+Tempo: ~500ms a cada consulta
+```
+
+**Com Materialized View:**
+```
+Primeira consulta: ~500ms (pré-calculada no banco)
+Consultas subsequentes: ~5ms (cache da aplicação)
+Speedup: 100x
+```
+
+### ⚠️ Limitações
+
+1. **Não funciona com soft deletes**: Views materializadas não incluem registros excluídos (`deleted_at IS NOT NULL`).
+   ```php
+   // ❌ Não funciona
+   $repository->onlyTrashed()->useMaterializedView('vw_xxx')->get();
+   
+   // ✅ Usa a tabela normal
+   $repository->onlyTrashed()->get();
+   ```
+
+2. **Dados podem estar desatualizados**: O refresh é manual ou agendado.
+
+3. **Requer PostgreSQL**: MySQL não suporta Materialized Views nativamente.
+
+4. **Cache**: Recomenda-se usar Redis/Memcached para melhor performance com tags.
+
+### 🏢 Suporte a Multi-Tenancy
+
+As views automaticamente aplicam o filtro de sub_tenant baseado na `SharingPolicy` do model:
+
+```php
+// Model Pedido
+class Pedido extends Model
+{
+    use HasSharingPolicy;
+    
+    public function sharingPolicy(): SharingPolicy
+    {
+        return SharingPolicy::RESTRICTED; // ou USER_FILIALS, ALL_FILIALS
+    }
+}
+
+// A view vw_vendas_por_cliente será automaticamente filtrada
+// pelo sub_tenant_id do contexto atual
+```
 
 ---
 

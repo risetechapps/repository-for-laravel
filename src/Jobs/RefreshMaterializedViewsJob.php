@@ -17,22 +17,38 @@ class RefreshMaterializedViewsJob implements ShouldQueue
     public int $backoff = 60;
     public int $timeout = 300;
 
-    protected BaseRepository $repository;
+    /**
+     * Classe do repository (string) em vez do objeto.
+     * Evita serialização pesada e garante estado fresh no handle().
+     */
+    protected string $repositoryClass;
     protected array $parameters = [];
 
     public function __construct(BaseRepository $repository, array $parameters = [])
     {
-        $this->repository = $repository;
+        $this->repositoryClass = get_class($repository);
         $this->parameters = $parameters;
     }
 
     public function handle(): void
     {
-        if(array_key_exists('auth', $this->parameters) && $this->parameters['auth'] != null) {
-            auth()->setUser($this->parameters['auth']);
+        /** @var BaseRepository $repository */
+        $repository = app($this->repositoryClass);
+
+        $previousUser = auth()->check() ? auth()->user() : null;
+
+        try {
+            if (array_key_exists('auth', $this->parameters) && $this->parameters['auth'] != null) {
+                auth()->setUser($this->parameters['auth']);
+            }
+
+            $repository->refreshMaterializedViews();
+        } finally {
+            if ($previousUser !== null) {
+                auth()->setUser($previousUser);
+            } else {
+                auth()->logout();
+            }
         }
-
-        $this->repository->refreshMaterializedViews();
-
     }
 }

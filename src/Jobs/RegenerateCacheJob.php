@@ -1,5 +1,7 @@
 <?php
 
+declare(strict_types=1);
+
 namespace RiseTechApps\Repository\Jobs;
 
 use Illuminate\Bus\Queueable;
@@ -14,26 +16,33 @@ class RegenerateCacheJob implements ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
-    protected BaseRepository $repository;
+    /**
+     * Classe do repository (string) em vez do objeto.
+     * Evita serialização pesada e garante estado fresh no handle().
+     */
+    protected string $repositoryClass;
     protected array $method = [];
     protected array $parameters;
 
     public function __construct(BaseRepository $repository, array $method, array $parameters = [])
     {
-        $this->repository = $repository;
+        $this->repositoryClass = get_class($repository);
         $this->method = $method;
         $this->parameters = $parameters;
     }
 
     public function handle(): void
     {
+        /** @var BaseRepository $repository */
+        $repository = app($this->repositoryClass);
+
         foreach ($this->method as $method) {
-            $this->repository->rememberCache(function () use ($method) {
+            $repository->rememberCache(function () use ($repository, $method) {
                 switch ($method) {
                     case Repository::$methodFind:
-                        return $this->repository->find($this->parameters[0] ?? null);
+                        return $repository->findById($this->parameters[0] ?? null);
                     case Repository::$methodAll:
-                        return $this->repository->get();
+                        return $repository->get();
                 }
             }, $method, $this->parameters);
         }

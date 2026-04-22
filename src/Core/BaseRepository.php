@@ -752,7 +752,19 @@ abstract class BaseRepository implements RepositoryInterface
         return $result;
     }
 
-    public function orderBy($column, $order = 'DESC')
+    /**
+     * Define ordenação para a query (encadeável).
+     * Para views materializadas, funciona em conjunto com where(), paginate(), etc.
+     *
+     * Uso:
+     *   $repository->orderBy('created_at', 'desc')->get();
+     *   $repository->useMaterializedView('view')->orderBy('coluna')->paginate(10);
+     *
+     * @param string $column Coluna para ordenar
+     * @param string $order Direção (asc ou desc)
+     * @return static
+     */
+    public function orderBy(string $column, string $order = 'DESC'): static
     {
         if (mb_strtoupper($order) !== 'DESC' && mb_strtoupper($order) !== 'ASC') {
             $order = 'ASC';

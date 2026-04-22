@@ -801,8 +801,8 @@ abstract class BaseRepository implements RepositoryInterface
      */
     public function paginate($totalPage = 10): array
     {
-        // Para views materializadas, usar cache
-        if ($this->shouldUseView()) {
+        // Para views materializadas ou quando currentBuilder está definido
+        if ($this->shouldUseView() || $this->currentBuilder) {
             return $this->paginateWithView($totalPage);
         }
 
@@ -852,15 +852,19 @@ abstract class BaseRepository implements RepositoryInterface
     protected function paginateWithView($totalPage): array
     {
         $request = request();
-        $cacheKey = 'paginate_view_' . md5(serialize($request->all()));
+        $cacheKey = 'paginate_view_' . md5(serialize($request->all()) . ($this->currentBuilder ? spl_object_hash($this->currentBuilder) : ''));
 
-        return $this->rememberCache(function () use ($totalPage) {
-            $request          = request();
+        return $this->rememberCache(function () use ($totalPage, $request) {
             $perPage          = $request->get('pagesize', $totalPage);
             $search           = $request->get('search');
             $searchableFields = $request->get('searchable_fields', []);
 
-            $query = $this->viewQuery();
+            // Se já temos um builder em andamento (de where(), orderBy(), etc), usa ele
+            if ($this->currentBuilder) {
+                $query = $this->currentBuilder;
+            } else {
+                $query = $this->viewQuery();
+            }
 
             if (!empty(trim($search ?? '')) && !empty($searchableFields)) {
                 $query->where(function ($mainQuery) use ($search, $searchableFields) {
@@ -873,12 +877,14 @@ abstract class BaseRepository implements RepositoryInterface
                 });
             }
 
-            $sortColumn    = $this->resolveSortColumn($request->get('sort_column', 'id'));
-            $sortDirection = in_array(strtolower($request->get('sort_direction', 'asc')), ['asc', 'desc'])
-                ? $request->get('sort_direction', 'asc')
-                : 'asc';
-
-            $query->orderBy($sortColumn, $sortDirection);
+            // Aplica ordenação do request se não houver ordenação manual
+            if (!$this->currentBuilder || !str_contains($query->toSql(), 'ORDER BY')) {
+                $sortColumn    = $this->resolveSortColumn($request->get('sort_column', 'id'));
+                $sortDirection = in_array(strtolower($request->get('sort_direction', 'asc')), ['asc', 'desc'])
+                    ? $request->get('sort_direction', 'asc')
+                    : 'asc';
+                $query->orderBy($sortColumn, $sortDirection);
+            }
 
             $data = $query->paginate($perPage);
 
@@ -938,7 +944,13 @@ abstract class BaseRepository implements RepositoryInterface
     public function when($condition, callable $callback): static
     {
         if ($condition) {
-            $this->currentBuilder = $callback($this->newQuery());
+            // Se já temos um builder em andamento, usa ele
+            if ($this->currentBuilder) {
+                $this->currentBuilder = $callback($this->currentBuilder);
+            } else {
+                $query = $this->shouldUseView() ? $this->viewQuery() : $this->newQuery();
+                $this->currentBuilder = $callback($query);
+            }
         }
         return $this;
     }
@@ -1679,6 +1691,24 @@ abstract class BaseRepository implements RepositoryInterface
 
         $this->currentBuilder  = $this->newQuery()->select($formattedColumns);
 
+        return $this;
+    }
+
+    /**
+     * Adiciona uma expressão SQL raw ao SELECT.
+     * Para views materializadas, permite selecionar colunas calculadas.
+     *
+     * Uso:
+     *   $repository->selectRaw('SUM(valor) as total, COUNT(*) as count')->first();
+     *   $repository->useMaterializedView('view')->selectRaw('col1, col2')->get();
+     *
+     * @param string $expression Expressão SQL
+     * @return static
+     */
+    public function selectRaw(string $expression): static
+    {
+        $query = $this->shouldUseView() ? $this->viewQuery() : $this->newQuery();
+        $this->currentBuilder = $query->selectRaw($expression);
         return $this;
     }
 

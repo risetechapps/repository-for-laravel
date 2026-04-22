@@ -780,12 +780,15 @@ abstract class BaseRepository implements RepositoryInterface
             $order = 'ASC';
         }
 
-        $result = $this->rememberCache(function () use ($column, $order) {
-            return $this->newQuery()->orderBy($column, $order)->get();
-        }, Repository::$methodOrder);
+        // Se já temos um builder em andamento, reutiliza
+        if ($this->currentBuilder) {
+            $this->currentBuilder = $this->currentBuilder->orderBy($column, $order);
+        } else {
+            $query = $this->shouldUseView() ? $this->viewQuery() : $this->newQuery();
+            $this->currentBuilder = $query->orderBy($column, $order);
+        }
 
-        $this->resetScope();
-        return $result;
+        return $this;
     }
 
     // =========================================================================

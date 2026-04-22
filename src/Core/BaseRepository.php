@@ -618,7 +618,8 @@ abstract class BaseRepository implements RepositoryInterface
      */
     public function whereBetween(string $column, array $values): static
     {
-        $this->currentBuilder = $this->newQuery()->whereBetween($column, $values);
+        $query = $this->shouldUseView() ? $this->viewQuery() : $this->newQuery();
+        $this->currentBuilder = $query->whereBetween($column, $values);
         return $this;
     }
 

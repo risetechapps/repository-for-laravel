@@ -23,6 +23,8 @@ interface RepositoryInterface
 
     public function whereDate(string $column, string $operator, $value);
 
+    public function where(string $column, $operator = null, $value = null);
+
     public function whereIn(string $column, array $values);
 
     public function whereBetween(string $column, array $values);

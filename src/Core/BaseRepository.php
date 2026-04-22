@@ -561,6 +561,31 @@ abstract class BaseRepository implements RepositoryInterface
     }
 
     /**
+     * Filtra registros com uma condição WHERE simples.
+     *
+     * Uso:
+     *   $repository->where('status', 'ativo')->get();
+     *   $repository->where('valor', '>', 100)->get();
+     *
+     * @param string $column Coluna para filtrar
+     * @param mixed $operator Operador ou valor (se 2 argumentos)
+     * @param mixed $value Valor a comparar (se 3 argumentos)
+     * @return static
+     */
+    public function where(string $column, $operator = null, $value = null): static
+    {
+        // Se estiver usando view materializada, usa viewQuery()
+        $query = $this->shouldUseView() ? $this->viewQuery() : $this->newQuery();
+
+        if (func_num_args() === 2) {
+            $this->currentBuilder = $query->where($column, $operator);
+        } else {
+            $this->currentBuilder = $query->where($column, $operator, $value);
+        }
+        return $this;
+    }
+
+    /**
      * Filtra registros onde a coluna está nos valores informados.
      *
      * Uso:

@@ -300,9 +300,10 @@ abstract class BaseRepository implements RepositoryInterface
             'with'        => $this->relationships,
             'tags'        => $this->tags,
             'onlyTrashed' => $this->onlyTrashedMode,
+            'activeView'  => $this->activeView,
         ];
 
-        $paramsHash = ':' . md5(json_encode($queryState, JSON_THROW_ON_ERROR | JSON_SORTED_KEYS));
+        $paramsHash = ':' . md5(json_encode($queryState, JSON_THROW_ON_ERROR));
         $name = "repo:{$entityClass}:{$method}{$paramsHash}";
 
         if ($this->Trashed())       $name .= ':trashed';

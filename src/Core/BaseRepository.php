@@ -465,6 +465,16 @@ abstract class BaseRepository implements RepositoryInterface
 
     public function first()
     {
+        // Se já temos um builder em andamento, usa ele
+        if ($this->currentBuilder) {
+            $result = $this->rememberCache(function () {
+                return $this->currentBuilder->first();
+            }, Repository::$methodFirst);
+
+            $this->resetScope();
+            return $result;
+        }
+
         if ($this->shouldUseView()) {
             $result = $this->rememberCache(function () {
                 return $this->viewQuery()->first();

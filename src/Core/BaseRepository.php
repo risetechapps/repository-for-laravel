@@ -87,7 +87,7 @@ abstract class BaseRepository implements RepositoryInterface
      * Se definido, só cacheia se o callback retornar true.
      * Resetado automaticamente pelo resetScope() após cada operação.
      */
-    protected ?callable $cacheCondition = null;
+    protected $cacheCondition = null;
 
     /**
      * Threshold para slow query log (em ms).

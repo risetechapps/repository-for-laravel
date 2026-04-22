@@ -557,7 +557,8 @@ abstract class BaseRepository implements RepositoryInterface
      */
     public function whereDate(string $column, string $operator, $value): static
     {
-        $this->currentBuilder = $this->newQuery()->whereDate($column, $operator, $value);
+        $query = $this->shouldUseView() ? $this->viewQuery() : $this->newQuery();
+        $this->currentBuilder = $query->whereDate($column, $operator, $value);
         return $this;
     }
 

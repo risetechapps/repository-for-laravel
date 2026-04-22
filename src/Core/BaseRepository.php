@@ -600,7 +600,8 @@ abstract class BaseRepository implements RepositoryInterface
      */
     public function whereIn(string $column, array $values): static
     {
-        $this->currentBuilder = $this->newQuery()->whereIn($column, $values);
+        $query = $this->shouldUseView() ? $this->viewQuery() : $this->newQuery();
+        $this->currentBuilder = $query->whereIn($column, $values);
         return $this;
     }
 

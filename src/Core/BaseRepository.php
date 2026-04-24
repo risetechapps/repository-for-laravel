@@ -777,7 +777,8 @@ abstract class BaseRepository implements RepositoryInterface
      */
     public function orderBy(string $column, string $order = 'DESC'): static
     {
-        if (mb_strtoupper($order) !== 'DESC' && mb_strtoupper($order) !== 'ASC') {
+        $order = strtoupper($order);
+        if ($order !== 'DESC' && $order !== 'ASC') {
             $order = 'ASC';
         }
 

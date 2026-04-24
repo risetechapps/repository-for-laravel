@@ -99,7 +99,7 @@ interface RepositoryInterface
 
     public function dataTable();
 
-    public function orderBy($column, $order = 'DESC');
+    public function orderBy(string $column, string $order = 'DESC');
 
     public function useTrashed(bool $permission): static;
 

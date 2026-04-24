@@ -31,7 +31,8 @@ abstract class BaseRepository implements RepositoryInterface
 {
     protected ?string $activeView = null;
     protected string $entityClass;
-    protected ?Builder $currentBuilder = null;
+    /** @var \Illuminate\Database\Eloquent\Builder|\Illuminate\Database\Query\Builder|null */
+    protected $currentBuilder = null;
     protected Carbon $tll;
     protected $driver;
     protected bool $supportTag      = false;

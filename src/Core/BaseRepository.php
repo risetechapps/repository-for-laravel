@@ -128,9 +128,6 @@ abstract class BaseRepository implements RepositoryInterface
      */
     protected ?int $customCacheTtlMinutes = null;
 
-    /**
-     * @throws NotEntityDefinedException
-     */
     public function __construct()
     {
         $this->entityClass           = $this->entity();

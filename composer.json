@@ -36,9 +36,6 @@
         "pestphp/pest": "^4.1",
         "pestphp/pest-plugin-laravel": "^4.0"
     },
-    "suggest": {
-        "risetechapps/tenancy-for-laravel": "Aplica isolamento multi-tenant nas consultas e views materializadas via global scope no model e override do hook applyViewScope() no repositório."
-    },
     "autoload": {
         "psr-4": {
             "RiseTechApps\\Repository\\": "src"

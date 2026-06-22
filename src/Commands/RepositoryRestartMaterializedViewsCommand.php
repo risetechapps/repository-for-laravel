@@ -53,7 +53,7 @@ class RepositoryRestartMaterializedViewsCommand extends Command
             try {
                 $repositoryInstance = app($repositoryContract);
                 $repositoryInstance->cleanMaterializedView();
-                $repositoryInstance->refreshMaterializedViews();
+                $repositoryInstance->refreshMaterializedViews(strict: true);
 
                 $this->info('    [OK] Restart successfully.');
 

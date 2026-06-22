@@ -9,6 +9,8 @@ interface RepositoryInterface
 
     public function findById($id);
 
+    public function findOrFail($id);
+
     public function find($id): static;
 
     public function setId($id): static;
@@ -46,6 +48,8 @@ interface RepositoryInterface
     public function oldest(string $column = 'created_at');
 
     public function withCount(string|array $relations);
+
+    public function transaction(callable $callback, int $attempts = 1);
 
     public function store(array $data);
 
@@ -107,6 +111,8 @@ interface RepositoryInterface
 
     public function clearCacheForEntity(string $method = '', array $parameters = []): void;
 
+    public function flushTags(array $tags): void;
+
     public function entity();
 
     public function entityOn();
@@ -137,9 +143,9 @@ interface RepositoryInterface
 
     public function registerViews(): array;
 
-    public function createMaterializedViews(): void;
+    public function createMaterializedViews(bool $strict = false): void;
 
-    public function refreshMaterializedViews(?string $view = null, bool $concurrently = true): void;
+    public function refreshMaterializedViews(?string $view = null, bool $concurrently = true, bool $strict = false): void;
 
     public function useMaterializedView(string $view): static;
 

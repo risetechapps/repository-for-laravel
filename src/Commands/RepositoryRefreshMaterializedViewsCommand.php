@@ -52,7 +52,7 @@ class RepositoryRefreshMaterializedViewsCommand extends Command
 
             try {
                 $repositoryInstance = app($repositoryContract);
-                $repositoryInstance->refreshMaterializedViews();
+                $repositoryInstance->refreshMaterializedViews(strict: true);
 
                 $this->info('    [OK] Updated successfully.');
 

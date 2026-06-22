@@ -63,6 +63,19 @@ class InvalidFilterException extends RepositoryException
     }
 
     /**
+     * Cria uma exceção para nome de coluna inválido (não é um identificador
+     * simples ou não consta na whitelist/colunas da tabela). Protege contra
+     * SQL injection via identificador em queries raw.
+     */
+    public static function invalidColumn(string $column): self
+    {
+        return new static(
+            "Coluna [{$column}] inválida ou não permitida.",
+            ['column' => $column]
+        );
+    }
+
+    /**
      * Cria uma exceção para filtro malformado.
      */
     public static function malformedFilter(array $filter, string $reason = ''): self

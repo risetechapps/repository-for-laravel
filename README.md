@@ -15,14 +15,22 @@ O **Laravel Repository** é um package para Laravel que abstrai a camada de dado
 - 📦 **Operações em Lote** - `storeMany`, `updateMany`, `deleteMany`, `upsert`
 - ⚡ **Performance** - Cursor pagination, selects otimizados, cache warming
 - 🔔 **Eventos** - Eventos para create/update/delete com listeners configuráveis
-- 🛡️ **Segurança** - Sanitização automática, validação de operadores, SQL injection protection
+- 🛡️ **Segurança** - Sanitização automática, validação de operadores e **de colunas** (SQL injection protection em buscas raw)
+- 🔌 **Conexão do model** - Consultas, views e transações respeitam a conexão definida no model
+- 🧩 **Agnóstico de tenancy** - Isolamento de views via hook `applyViewScope()`, sem acoplar regra de multi-tenancy
 - 📈 **Métricas** - Query logging, cache hit rate, estatísticas de uso
 
 ---
 
-## 📋 Novidades (v2.6.0)
+## 📋 Novidades (v3.0.0)
+
+> ⚠️ **Breaking change:** o isolamento automático de views por `SharingPolicy` foi **removido** do package. O package agora é agnóstico de tenancy — o isolamento de views passa a ser feito sobrescrevendo o hook `applyViewScope()` (ver seção [Isolamento nas Views](#-isolamento-nas-views-multi-tenancy-etc)).
 
 ### Novos Métodos
+- `findOrFail()` - Busca pelo ID lançando `EntityNotFoundException` se não existir
+- `transaction()` - Operações atômicas na conexão do model
+- `flushTags()` - Invalidação granular de cache por tag
+- `resetMetrics()` - Zera as métricas acumuladas (útil em workers long-running)
 - `firstOrCreate()` / `updateOrCreate()` - Busca ou cria/atualiza
 - `duplicate()` - Clona registros com modificações
 - `increment()` / `decrement()` - Operações atômicas
@@ -32,10 +40,16 @@ O **Laravel Repository** é um package para Laravel que abstrai a camada de dado
 - `when()` / `selectOptimized()` / `cursorPaginate()` - Performance
 
 ### Melhorias
+- **Desacoplamento de tenancy**: isolamento de views agora via hook `applyViewScope()` (sem dependência de `SharingPolicy` no package)
+- **Conexão do model** respeitada em views materializadas, SQL raw e transações
+- **Segurança**: validação de nome de coluna (whitelist + identificador) em `fuzzySearch`/`searchFullText`/`findWhereJson`
+- `cacheIf()` agora **realmente** condiciona o cache; `withCacheTags()` cria pontos de invalidação reais
+- `registerViews()` passou a ter default (`[]`) — opcional em repositórios sem views
+- Modo `strict` em `refreshMaterializedViews()` (falha-rápido nos comandos artisan)
+- `warming_enabled` / `warming_methods` do config agora são respeitados
+- Suíte de testes (Pest + Testbench) adicionada
 - Eventos do Repository (`RepositoryCreated`, `RepositoryUpdated`, etc.)
-- Validação de operadores em `findWhereCustom`
-- Cache automático em Materialized Views
-- Serialização segura nos Jobs
+- Serialização segura nos Jobs (`afterCommit`)
 - Configuração expandida em `config/repository.php`
 
 ---
@@ -64,13 +78,17 @@ php artisan vendor:publish --provider="RiseTechApps\Repository\RepositoryService
 ### 3. Criar um Repository
 
 ```bash
-php artisan make:repository {name}
+php artisan repository:make {name}
 ```
 
 ### 4. Configurar o Repository e a Interface
 
 ```php
 // app/Repositories/ClientEloquentRepository.php
+
+/**
+ * @extends BaseRepository<\App\Models\Client>
+ */
 class ClientEloquentRepository extends BaseRepository implements ClientRepository
 {
     public function entity(): string
@@ -85,6 +103,8 @@ interface ClientRepository extends RepositoryInterface
     // métodos customizados do domínio aqui
 }
 ```
+
+> O `@extends BaseRepository<\App\Models\Client>` é opcional, mas habilita autocomplete e análise estática precisos: `findById()` retorna `Client|null`, `get()` retorna `Collection<int, Client>`, etc. Repositórios gerados por `php artisan repository:make` já incluem essa anotação.
 
 ### 5. Definir colunas permitidas para ordenação (segurança)
 
@@ -131,10 +151,25 @@ $client = $clientRepository->first();
 ---
 
 #### `findById($id)`
-Busca um registro pelo ID.
+Busca um registro pelo ID. Retorna `null` se não existir.
 
 ```php
 $client = $clientRepository->findById(1);
+```
+
+---
+
+#### `findOrFail($id)`
+Variante estrita de `findById()`. Lança `EntityNotFoundException` (HTTP 404) quando o registro não existe — útil em rotas que esperam o recurso.
+
+```php
+use RiseTechApps\Repository\Exception\EntityNotFoundException;
+
+try {
+    $client = $clientRepository->findOrFail($id);
+} catch (EntityNotFoundException $e) {
+    // $e->getEntityName(), $e->getSearchedId()
+}
 ```
 
 ---
@@ -638,6 +673,21 @@ $clientRepository->onlyTrashed()->chunk(200, function ($lote) {
 
 ---
 
+#### `transaction(callable $callback, int $attempts = 1)`
+Executa o callback dentro de uma transação **na conexão do model**, agrupando várias operações atomicamente. Retorna o valor do callback; em deadlock, reexecuta até `$attempts` vezes.
+
+```php
+$pedido = $pedidoRepository->transaction(function () use ($pedidoRepository, $itemRepository) {
+    $pedido = $pedidoRepository->store([...]);
+    $itemRepository->storeMany([...]);
+    return $pedido;
+});
+```
+
+> Os jobs de cache (`RegenerateCacheJob` / `RefreshMaterializedViewsJob`) são `afterCommit`: só disparam **após o commit** da transação. Em rollback, nada de cache é regenerado com dados revertidos.
+
+---
+
 #### `store(array $data)`
 Cria um novo registro e invalida o cache.
 
@@ -852,6 +902,127 @@ $clientRepository->find(1)->forceDelete();
 
 ---
 
+### Cache avançado
+
+#### `cacheFor()` / `cacheForHours()` / `cacheForDays()`
+Define o TTL da próxima operação (encadeável; resetado após a operação).
+
+```php
+$clientRepository->cacheFor(5)->get();        // 5 minutos
+$clientRepository->cacheForHours(2)->first();  // 2 horas
+$clientRepository->cacheForDays(1)->findById(1);
+```
+
+---
+
+#### `cacheIf(callable $condition)`
+Só grava o resultado no cache se o callback (que **recebe o resultado**, após a query) retornar `true`. Útil para **não cachear resultados vazios**.
+
+```php
+// Resultado vazio não é cacheado — a próxima chamada volta ao banco
+$clientRepository->cacheIf(fn($result) => $result->isNotEmpty())->get();
+```
+
+---
+
+#### `withCacheTags(array $tags)` / `setTags(array $tags)`
+Marca o cache da operação com tags adicionais (além da tag da entidade), criando **pontos de invalidação granulares**. Requer driver com suporte a tags (Redis/Memcached).
+
+```php
+$clientRepository->withCacheTags(['clientes:ativos'])->get();
+```
+
+---
+
+#### `flushTags(array $tags)`
+Invalida o cache associado às tags informadas — invalidação granular, sem flush total da entidade. No-op em drivers sem suporte a tags.
+
+```php
+$clientRepository->flushTags(['clientes:ativos']);
+```
+
+---
+
+#### `clearCacheForEntity()` e invalidação granular (opt-in)
+Toda escrita chama `clearCacheForEntity()`, que por padrão faz **flush total** da entidade (seguro: nunca serve dado stale) via `flushEntityCache()`. Para invalidação granular, sobrescreva `flushEntityCache()` no repositório, combinando `withCacheTags()` nas leituras com `flushTags()` (ou ouvindo os eventos `RepositoryCreated/Updated/Deleted`, que carregam o model):
+
+```php
+class ClientEloquentRepository extends BaseRepository implements ClientRepository
+{
+    protected function flushEntityCache(): void
+    {
+        $this->flushTags(['clientes:empresa:' . tenant()->id]);
+    }
+}
+```
+
+#### Cache warming
+Após uma escrita, o `RegenerateCacheJob` re-aquece o cache recém-limpo. Controlado por config:
+
+```php
+// config/repository.php
+'cache' => [
+    'warming_enabled' => true,            // false = rebuild lazy no próximo read
+    'warming_methods' => ['get', 'first'], // aceita: get, first, dataTable
+],
+```
+
+---
+
+### 🛡️ Segurança
+
+#### Sanitização de input
+`store()`/`update()` sanitizam strings (remoção de tags HTML) conforme `config('repository.sanitization')`.
+
+#### Validação de coluna (SQL injection)
+Em buscas com SQL raw — `fuzzySearch()`, `searchFullText()`, `findWhereJson()` — os **valores** já vão por binding. Os **nomes de coluna** (que não podem ser bindados) são validados em duas camadas:
+
+1. **Identificador** — só `^[a-zA-Z_][a-zA-Z0-9_]*$`, o que impede fechar aspas/injetar SQL.
+2. **Whitelist** — `$allowedColumns` (se definida) ou as colunas reais da tabela (`Schema::getColumnListing`).
+
+Coluna inválida ou injeção → `InvalidFilterException`.
+
+```php
+class ClientEloquentRepository extends BaseRepository implements ClientRepository
+{
+    // Opcional: restringe ainda mais as colunas aceitas em buscas raw
+    protected array $allowedColumns = ['nome', 'email'];
+}
+```
+
+> No `findWhereJson()`, apenas a **coluna base** é validada contra o schema; as **chaves do JSON** podem ser arbitrárias (vão pelo operador JSON nativo do builder, que as escapa com segurança).
+
+#### Ordenação no `paginate()`
+`sort_column` é validado contra `$allowedSortColumns` (fallback seguro `id`).
+
+---
+
+### 📈 Métricas
+
+#### `getMetrics()`
+Retorna estatísticas de uso (queries, cache hit rate, slow queries, etc.).
+
+```php
+$metrics = $clientRepository->getMetrics();
+// ['total_queries' => 12, 'cache_hit_rate' => 83.33, 'avg_query_time' => 1.4, ...]
+```
+
+#### `resetMetrics()`
+Zera as métricas acumuladas. As métricas são **estáticas** (compartilhadas por todos os repositórios no processo); em workers long-running (Octane, queue daemon) elas acumulam entre requests/jobs. Chame no início de cada ciclo para ter métricas isoladas.
+
+```php
+ClientEloquentRepository::resetMetrics();
+```
+
+#### `enableSlowQueryLog(int $threshold)`
+Loga queries acima do threshold (ms) na próxima operação.
+
+```php
+$clientRepository->enableSlowQueryLog(100)->get();
+```
+
+---
+
 ### Materialized Views (PostgreSQL)
 
 Permitem pré-calcular e cachear consultas complexas diretamente no banco, com refresh controlado pela aplicação.
@@ -859,6 +1030,8 @@ Permitem pré-calcular e cachear consultas complexas diretamente no banco, com r
 ---
 
 #### `registerViews()` — configuração na subclasse
+
+Opcional: repositórios sem views materializadas não precisam implementar (o default retorna `[]`). Sobrescreva apenas quando o repositório usar views:
 
 ```php
 class RelatorioPedidoRepository extends BaseRepository
@@ -1183,25 +1356,37 @@ Speedup: 100x
 
 4. **Cache**: Recomenda-se usar Redis/Memcached para melhor performance com tags.
 
-### 🏢 Suporte a Multi-Tenancy
+### 🏢 Isolamento nas Views (multi-tenancy, etc.)
 
-As views automaticamente aplicam o filtro de sub_tenant baseado na `SharingPolicy` do model:
+O package é **agnóstico de tenancy** — não conhece `SharingPolicy`, `sub_tenant` nem nenhuma regra de isolamento. Em vez disso, expõe um **hook** que o repositório pode sobrescrever para aplicar o filtro que quiser sobre a query das views materializadas:
 
 ```php
-// Model Pedido
-class Pedido extends Model
+// BaseRepository — default: não filtra nada
+protected function applyViewScope(\Illuminate\Database\Query\Builder $query): \Illuminate\Database\Query\Builder
 {
-    use HasSharingPolicy;
-    
-    public function sharingPolicy(): SharingPolicy
+    return $query;
+}
+```
+
+- **Projeto sem isolamento** → não faz nada (sem erro).
+- **Projeto com isolamento** → sobrescreve `applyViewScope()` no repositório (diretamente ou via trait reutilizável), aplicando o filtro.
+
+```php
+class PedidoEloquentRepository extends BaseRepository implements PedidoRepository
+{
+    protected function applyViewScope($query)
     {
-        return SharingPolicy::RESTRICTED; // ou USER_FILIALS, ALL_FILIALS
+        if (!subTenancy()->isInitialized()) {
+            return $query->whereRaw('1 = 0'); // falha segura
+        }
+        return $query->where('sub_tenant_id', subTenancy()->getKey());
     }
 }
-
-// A view vw_vendas_por_cliente será automaticamente filtrada
-// pelo sub_tenant_id do contexto atual
 ```
+
+> No caminho **Eloquent** (`get`/`first`/`where`/...), o isolamento continua vindo dos **global scopes do próprio model** — o repositório não interfere. O `applyViewScope()` cobre só o caminho das **views materializadas** (`DB::table`), que não passa por global scopes.
+>
+> Para projetos que usam `risetechapps/tenancy-for-laravel`, a regra de isolamento (RESTRICTED / USER_FILIALS / ALL_FILIALS) vive **fora deste package**, como uma trait que sobrescreve `applyViewScope()`. Ver o `suggest` no `composer.json`.
 
 ---
 

@@ -8,6 +8,7 @@ use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Schema;
 use RiseTechApps\Repository\Contracts\RepositoryInterface;
 use RiseTechApps\Repository\Events\AfterRefreshAllMaterializedViewsJobEvent;
 use RiseTechApps\Repository\Events\AfterRefreshMaterializedViewsJobEvent;
@@ -19,14 +20,24 @@ use RiseTechApps\Repository\Events\RepositoryDeleted;
 use RiseTechApps\Repository\Events\RepositoryDeleting;
 use RiseTechApps\Repository\Events\RepositoryUpdated;
 use RiseTechApps\Repository\Events\RepositoryUpdating;
+use RiseTechApps\Repository\Exception\CacheOperationException;
+use RiseTechApps\Repository\Exception\EntityNotFoundException;
 use RiseTechApps\Repository\Exception\InvalidFilterException;
+use RiseTechApps\Repository\Exception\MaterializedViewException;
 use RiseTechApps\Repository\Exception\NotEntityDefinedException;
 use RiseTechApps\Repository\Jobs\RefreshMaterializedViewsJob;
 use RiseTechApps\Repository\Jobs\RegenerateCacheJob;
 use RiseTechApps\Repository\Repository;
-use RiseTechApps\Tenancy\Enums\SharingPolicy;
-use RiseTechApps\Tenancy\Models\SubTenant\SubTenant;
 
+/**
+ * @template TModel of \Illuminate\Database\Eloquent\Model
+ *
+ * Repositórios filhos podem fixar o tipo do model para ganhar autocomplete e
+ * análise estática precisa nos retornos:
+ *
+ *   /** @extends BaseRepository<\App\Models\Client> *\/
+ *   class ClientEloquentRepository extends BaseRepository { ... }
+ */
 abstract class BaseRepository implements RepositoryInterface
 {
     protected ?string $activeView = null;
@@ -54,6 +65,13 @@ abstract class BaseRepository implements RepositoryInterface
      * Se vazio, usa 'id' como fallback seguro (evita SQL Injection).
      */
     protected array $allowedSortColumns = [];
+
+    /**
+     * Colunas permitidas em buscas com SQL raw (fuzzySearch, searchFullText,
+     * findWhereJson). Se vazio, valida contra as colunas reais da tabela.
+     * Subclasses podem sobrescrever para restringir ainda mais.
+     */
+    protected array $allowedColumns = [];
 
     /**
      * Operadores permitidos em findWhereCustom.
@@ -183,7 +201,8 @@ abstract class BaseRepository implements RepositoryInterface
     }
 
     /**
-     * Gera uma query limpa. É aqui que o TenancyScope será chamado no momento certo.
+     * Gera uma query limpa a partir do model. Os global scopes do model
+     * (se houver) são aplicados aqui pelo Eloquent.
      */
     protected function newQuery()
     {
@@ -191,6 +210,18 @@ abstract class BaseRepository implements RepositoryInterface
         // Caso contrário, iniciamos um do zero.
         $builder = $this->currentBuilder ?? app($this->entityClass)->newQuery();
         return $this->applyQueryScope($builder);
+    }
+
+    /**
+     * Conexão do banco derivada do próprio model da entidade.
+     *
+     * Garante que operações de SQL raw e materialized views usem a MESMA
+     * conexão dos métodos de consulta (get/first/where/...), respeitando o
+     * $connection definido no model (réplicas, banco por tenant, schema próprio).
+     */
+    protected function connection(): \Illuminate\Database\Connection
+    {
+        return app($this->entityClass)->getConnection();
     }
     // =========================================================================
     // SOFT DELETE / ESCOPO
@@ -336,20 +367,29 @@ abstract class BaseRepository implements RepositoryInterface
         $cacheKey = $this->getQualifyTagCache($method, $parameters);
         $ttl = $this->getCacheTtl();
 
-        // Verifica se já existe no cache
-        $inCache = $this->supportsTags()
-            ? Cache::tags([$this->entity()])->has($cacheKey)
-            : Cache::has($cacheKey);
+        // A tag da entidade está sempre presente (garante que clearCacheForEntity
+        // continue invalidando tudo). As tags de setTags()/withCacheTags() são
+        // anexadas como pontos de invalidação adicionais.
+        $store = $this->supportsTags()
+            ? Cache::tags(array_merge([$this->entity()], $this->tags))
+            : Cache::store();
 
-        if ($inCache) {
+        // Hit → devolve direto do cache
+        if ($store->has($cacheKey)) {
             self::$metrics['total_cache_hits']++;
-        } else {
-            self::$metrics['total_cache_misses']++;
+            $this->trackQueryMetrics($startTime, $method);
+            return $store->get($cacheKey);
         }
 
-        $result = $this->supportsTags()
-            ? Cache::tags([$this->entity()])->remember($cacheKey, $ttl, $call)
-            : Cache::remember($cacheKey, $ttl, $call);
+        // Miss → executa a query
+        self::$metrics['total_cache_misses']++;
+        $result = $call();
+
+        // cacheIf(): só grava se não houver condição ou se a condição aprovar o resultado.
+        // Sem cacheIf(), o comportamento é idêntico ao anterior (sempre cacheia).
+        if ($this->cacheCondition === null || ($this->cacheCondition)($result)) {
+            $store->put($cacheKey, $result, $ttl);
+        }
 
         $this->trackQueryMetrics($startTime, $method);
 
@@ -399,25 +439,104 @@ abstract class BaseRepository implements RepositoryInterface
 
     public function clearCacheForEntity(string $method = '', array $parameters = []): void
     {
-        if ($this->supportTag) {
-            $tag = $this->getEntityClassName();
-
-            Cache::tags([$tag])->flush();
-
-            $apiResponseTag = str_replace('\\', '.', $tag);
-            Cache::tags([$apiResponseTag, 'api_response'])->flush();
-        }
+        $this->flushEntityCache();
 
         try {
-            dispatch(new RegenerateCacheJob($this, [
-                Repository::$methodAll,
-                Repository::$methodFirst,
-            ]));
+            // Cache warming controlado por config — re-aquece o cache recém-limpo.
+            if (config('repository.cache.warming_enabled', true)) {
+                $methods = $this->resolveWarmingMethods();
 
-            dispatch(new RefreshMaterializedViewsJob($this, ['auth' => auth()->user()]));
+                if (!empty($methods)) {
+                    dispatch(new RegenerateCacheJob($this, $methods));
+                }
+            }
+
+            // Só refaz views se o repositório de fato declarar alguma.
+            // Evita job e serialização de auth desnecessários em repos sem view.
+            if (!empty($this->registerViews())) {
+                dispatch(new RefreshMaterializedViewsJob($this, ['auth' => auth()->user()]));
+            }
 
         } catch (\Exception $exception) {
             Log::error("Error processing cache clearing for {$this->getEntityClassName()}: " . $exception->getMessage());
+        }
+    }
+
+    /**
+     * Estratégia de invalidação de cache da entidade.
+     *
+     * Default: flush total das tags da entidade (seguro — nunca serve stale,
+     * porém grosso: um write zera todo o cache da entidade).
+     *
+     * Para invalidação GRANULAR (opt-in), sobrescreva este método no repositório:
+     *   - Marque as leituras com withCacheTags(['clientes:empresa:5']) (item tags).
+     *   - Aqui, invalide apenas os grupos afetados com flushTags([...]).
+     *   - Para invalidação ciente do registro alterado, prefira ouvir os eventos
+     *     RepositoryCreated/Updated/Deleted (que carregam o model) e chamar
+     *     flushTags() de lá.
+     *
+     * Atenção: invalidação parcial mal planejada pode deixar caches de listagem
+     * (get/findWhere) stale — por isso o default permanece o flush total.
+     */
+    protected function flushEntityCache(): void
+    {
+        if (!$this->supportTag) {
+            return;
+        }
+
+        $tag = $this->getEntityClassName();
+        Cache::tags([$tag])->flush();
+
+        $apiResponseTag = str_replace('\\', '.', $tag);
+        Cache::tags([$apiResponseTag, 'api_response'])->flush();
+    }
+
+    /**
+     * Traduz os warming_methods do config (nomes amigáveis) para as constantes
+     * de método que o RegenerateCacheJob entende. 'findById' é ignorado porque
+     * depende de um id que não existe no contexto de invalidação.
+     */
+    protected function resolveWarmingMethods(): array
+    {
+        $map = [
+            'get'       => Repository::$methodAll,
+            'first'     => Repository::$methodFirst,
+            'dataTable' => Repository::$methodDataTable,
+        ];
+
+        $configured = config('repository.cache.warming_methods', ['get', 'first']);
+
+        return array_values(array_filter(array_map(
+            fn($method) => $map[$method] ?? null,
+            $configured
+        )));
+    }
+
+    /**
+     * Invalida o cache associado às tags informadas.
+     *
+     * Complementa o clearCacheForEntity() (que limpa a entidade inteira),
+     * permitindo invalidação granular pelos grupos definidos em
+     * setTags()/withCacheTags().
+     *
+     * No-op quando o driver de cache não suporta tags (ex.: file, database).
+     *
+     * Uso:
+     *   $repository->flushTags(['clientes:ativos']);
+     *   $repository->flushTags(['empresa:5', 'empresa:5:clientes']);
+     *
+     * @param array $tags Tags a invalidar
+     */
+    public function flushTags(array $tags): void
+    {
+        if (!$this->supportTag || empty($tags)) {
+            return;
+        }
+
+        try {
+            Cache::tags($tags)->flush();
+        } catch (\Throwable $e) {
+            throw CacheOperationException::flushFailed($tags, $e);
         }
     }
 
@@ -461,6 +580,9 @@ abstract class BaseRepository implements RepositoryInterface
         return $this;
     }
 
+    /**
+     * @return TModel|null
+     */
     public function first()
     {
         // Se já temos um builder em andamento, usa ele
@@ -490,6 +612,9 @@ abstract class BaseRepository implements RepositoryInterface
         return $result;
     }
 
+    /**
+     * @return \Illuminate\Database\Eloquent\Collection<int, TModel>
+     */
     public function get()
     {
         if ($this->shouldUseView()) {
@@ -510,6 +635,10 @@ abstract class BaseRepository implements RepositoryInterface
         return $result;
     }
 
+    /**
+     * @param int|string $id
+     * @return TModel|null
+     */
     public function findById($id)
     {
         $result = $this->rememberCache(function () use ($id) {
@@ -520,6 +649,32 @@ abstract class BaseRepository implements RepositoryInterface
         return $result;
     }
 
+    /**
+     * Busca um registro pelo ID e lança EntityNotFoundException se não existir.
+     * Variante "estrita" do findById() — útil quando a ausência do registro
+     * deve interromper o fluxo (ex.: rotas que esperam o recurso existir).
+     *
+     * Uso:
+     *   $client = $repository->findOrFail($id);
+     *
+     * @param int|string $id
+     * @return TModel
+     * @throws EntityNotFoundException
+     */
+    public function findOrFail($id)
+    {
+        $result = $this->findById($id);
+
+        if ($result === null) {
+            throw new EntityNotFoundException($this->getEntityClassName(), $id);
+        }
+
+        return $result;
+    }
+
+    /**
+     * @return \Illuminate\Database\Eloquent\Collection<int, TModel>
+     */
     public function findWhere(array $conditions)
     {
         $result = $this->rememberCache(function () use ($conditions) {
@@ -979,6 +1134,33 @@ abstract class BaseRepository implements RepositoryInterface
     // ESCRITA
     // =========================================================================
 
+    /**
+     * Executa o callback dentro de uma transação na conexão do model.
+     * Retorna o que o callback retornar. Em caso de deadlock, reexecuta o
+     * callback até $attempts vezes (recurso nativo do Laravel).
+     *
+     * Os jobs de cache (RegenerateCacheJob/RefreshMaterializedViewsJob) são
+     * afterCommit, então só disparam após o commit — seguro em rollback.
+     *
+     * Uso:
+     *   $repo->transaction(function () use ($repo) {
+     *       $pedido = $repo->store([...]);
+     *       $repo->update($id, [...]);
+     *       return $pedido;
+     *   });
+     *
+     * @param callable $callback Operações a executar atomicamente
+     * @param int $attempts Tentativas em caso de deadlock
+     * @return mixed Valor retornado pelo callback
+     */
+    public function transaction(callable $callback, int $attempts = 1)
+    {
+        return $this->connection()->transaction($callback, $attempts);
+    }
+
+    /**
+     * @return TModel|null  Model criado, ou null se um listener cancelar a criação.
+     */
     public function store(array $data)
     {
         // Sanitiza dados se habilitado
@@ -1167,7 +1349,7 @@ abstract class BaseRepository implements RepositoryInterface
      *
      * @param array $attributes Atributos para buscar
      * @param array $values Valores adicionais ao criar (opcional)
-     * @return mixed O model encontrado ou criado
+     * @return TModel|null O model encontrado ou criado
      */
     public function firstOrCreate(array $attributes, array $values = [])
     {
@@ -1192,7 +1374,7 @@ abstract class BaseRepository implements RepositoryInterface
      *
      * @param array $attributes Atributos para buscar
      * @param array $values Valores para atualizar/criar
-     * @return mixed O model atualizado ou criado
+     * @return TModel|bool|null Model criado (caminho store) ou bool do update se já existia.
      */
     public function updateOrCreate(array $attributes, array $values = [])
     {
@@ -1216,8 +1398,8 @@ abstract class BaseRepository implements RepositoryInterface
      *   $newClient = $repository->duplicate(1, ['nome' => 'Cópia do Cliente']);
      *
      * @param mixed $id ID do registro a duplicar
-     * @param array $modificações Valores a substituir (opcional)
-     * @return mixed O novo model criado
+     * @param array $modifications Valores a substituir (opcional)
+     * @return TModel|null O novo model criado, ou null se o original não existir.
      */
     public function duplicate($id, array $modifications = [])
     {
@@ -1557,13 +1739,18 @@ abstract class BaseRepository implements RepositoryInterface
      */
     public function findWhereJson(string $path, $value)
     {
-        $result = $this->rememberCache(function () use ($path, $value) {
-            $parts = explode('.', $path);
-            $column = array_shift($parts);
-            $jsonPath = implode('->', $parts);
+        $parts  = explode('.', $path);
+        $column = $this->guardColumn(array_shift($parts));
 
+        // Operador JSON nativo do builder: cada segmento é escapado com
+        // segurança pelo grammar. As chaves do JSON podem ser arbitrárias
+        // (não precisam existir como colunas do schema), por isso não passam
+        // pela validação de coluna — só a coluna base é validada.
+        $selector = empty($parts) ? $column : $column . '->' . implode('->', $parts);
+
+        $result = $this->rememberCache(function () use ($selector, $value) {
             return $this->newQuery()
-                ->whereRaw("\"{$column}\"->>'{$jsonPath}' = ?", [$value])
+                ->where($selector, $value)
                 ->get();
         }, Repository::$methodFindWhere, [['json_path' => $path, 'value' => $value]]);
 
@@ -1583,6 +1770,8 @@ abstract class BaseRepository implements RepositoryInterface
      */
     public function searchFullText(string $query, array $columns)
     {
+        $columns = array_map(fn($column) => $this->guardColumn($column), $columns);
+
         $result = $this->rememberCache(function () use ($query, $columns) {
             $searchTerm = $this->sanitizeFullTextQuery($query);
 
@@ -1613,6 +1802,8 @@ abstract class BaseRepository implements RepositoryInterface
      */
     public function fuzzySearch(string $term, string $column)
     {
+        $column = $this->guardColumn($column);
+
         $result = $this->rememberCache(function () use ($term, $column) {
             return $this->newQuery()
                 ->whereRaw("\"{$column}\" % ?", [$term])
@@ -1631,6 +1822,52 @@ abstract class BaseRepository implements RepositoryInterface
     {
         // Remove caracteres especiais que podem causar erros no tsquery
         return preg_replace('/[|&!()<>:*]/', '', $query);
+    }
+
+    /**
+     * Valida um identificador de coluna antes de concatená-lo em SQL raw.
+     * Protege contra SQL injection via nome de coluna.
+     *
+     * Camadas:
+     *  1. Regex de identificador simples — impede fechar aspas/injetar SQL.
+     *  2. Whitelist: $allowedColumns (se definida) ou as colunas reais da tabela.
+     *
+     * Se a tabela não puder ser inspecionada (lista vazia), apenas a regex é
+     * aplicada — ainda assim suficiente para barrar injeção.
+     *
+     * @throws InvalidFilterException
+     */
+    protected function guardColumn(string $column): string
+    {
+        if (!preg_match('/^[a-zA-Z_][a-zA-Z0-9_]*$/', $column)) {
+            throw InvalidFilterException::invalidColumn($column);
+        }
+
+        $allowed = !empty($this->allowedColumns)
+            ? $this->allowedColumns
+            : $this->tableColumns();
+
+        if (!empty($allowed) && !in_array($column, $allowed, true)) {
+            throw InvalidFilterException::invalidColumn($column);
+        }
+
+        return $column;
+    }
+
+    /**
+     * Retorna as colunas reais da tabela do model (cacheado por 24h).
+     * Fonte correta para validar nomes de coluna — diferente de getFillable(),
+     * que descreve mass-assignment e não as colunas existentes.
+     */
+    protected function tableColumns(): array
+    {
+        $table = app($this->entityClass)->getTable();
+
+        return Cache::remember(
+            "repo:columns:{$table}",
+            now()->addHours(24),
+            fn() => Schema::getColumnListing($table)
+        );
     }
 
     /**
@@ -1767,12 +2004,16 @@ abstract class BaseRepository implements RepositoryInterface
     }
 
     /**
-     * Define uma condição para cachear o resultado.
-     * Só cacheia se o callback retornar true.
+     * Define uma condição para cachear o resultado da próxima operação terminal.
+     * O callback é chamado APÓS a query (no cache miss) e recebe o resultado;
+     * o resultado só é gravado no cache se o callback retornar true.
+     * Em caso de cache hit, o callback não é chamado.
+     *
+     * Útil, por exemplo, para não cachear resultados vazios.
      *
      * Uso:
-     *   $repository->cacheIf(fn($result) => $result->count() > 0)->get();
-     *   $repository->cacheIf(fn() => !$this->isDebugMode())->findById(1);
+     *   $repository->cacheIf(fn($result) => $result->isNotEmpty())->get();
+     *   $repository->cacheIf(fn($result) => $result !== null)->findById(1);
      *
      * @param callable $condition Callback que recebe o resultado e retorna bool
      * @return static
@@ -1841,6 +2082,25 @@ abstract class BaseRepository implements RepositoryInterface
             'avg_query_time' => $metrics['avg_query_time'],
             'slow_queries_count' => count($metrics['slow_queries']),
             'entity' => $this->getEntityClassName(),
+        ];
+    }
+
+    /**
+     * Zera as métricas acumuladas.
+     *
+     * As métricas são estáticas (compartilhadas por todos os repositórios no
+     * processo). Em workers long-running (Octane, queue daemon) elas acumulam
+     * entre requests/jobs — chame este método no início de cada ciclo para ter
+     * métricas por request, ou para isolar medições.
+     */
+    public static function resetMetrics(): void
+    {
+        self::$metrics = [
+            'total_queries' => 0,
+            'total_cache_hits' => 0,
+            'total_cache_misses' => 0,
+            'slow_queries' => [],
+            'avg_query_time' => 0,
         ];
     }
 
@@ -2038,22 +2298,55 @@ abstract class BaseRepository implements RepositoryInterface
         return $sql;
     }
 
-    public function createMaterializedViews(): void
+    /**
+     * Mapa de views materializadas do repositório: ['nome_view' => sql|array].
+     * Default vazio — repositórios sem views não precisam implementar.
+     * Subclasses que usam views materializadas sobrescrevem este método.
+     */
+    public function registerViews(): array
+    {
+        return [];
+    }
+
+    /**
+     * @param bool $strict Quando true, propaga MaterializedViewException em vez
+     *                     de apenas logar. Use em comandos artisan (falha-rápido);
+     *                     o job de refresh mantém o default false (resiliente).
+     */
+    public function createMaterializedViews(bool $strict = false): void
     {
         foreach ($this->registerViews() as $view => $query) {
             if (!$this->materializedViewExists($view)) {
                 // Suporta tanto string SQL quanto array do método view()
                 $sql = is_array($query) ? $query['sql'] : $query;
-                $this->createSingleMaterializedView($view, $sql);
+                $this->createSingleMaterializedView($view, $sql, $strict);
             }
         }
     }
 
-    protected function createSingleMaterializedView(string $view, string $query): void
+    /**
+     * Cria a view materializada e registra-a no catálogo administrativo.
+     *
+     * Duas operações com conexões DELIBERADAMENTE diferentes:
+     *
+     *  1. CREATE MATERIALIZED VIEW → connection() (conexão do model).
+     *     A view é um objeto físico do Postgres; precisa nascer no banco onde
+     *     os dados do model vivem.
+     *
+     *  2. INSERT em `materialized_views` → DB (conexão default).
+     *     Esta tabela NÃO é a view: é um registro administrativo central
+     *     (nome, autor, datas) criado pela migration do package na conexão
+     *     default. Nenhuma lógica lê esta tabela — quem responde "a view
+     *     existe?" é o pg_matviews (ver materializedViewExists()). Por isso o
+     *     registro fica centralizado, agregando todas as views de todos os
+     *     repositórios num lugar só, independentemente da conexão de cada view.
+     */
+    protected function createSingleMaterializedView(string $view, string $query, bool $strict = false): void
     {
         try {
-            DB::statement("CREATE MATERIALIZED VIEW {$view} AS {$query}");
+            $this->connection()->statement("CREATE MATERIALIZED VIEW {$view} AS {$query}");
 
+            // Catálogo administrativo central (conexão default) — ver docblock.
             DB::table('materialized_views')->updateOrInsert(
                 ['name' => $view],
                 [
@@ -2064,13 +2357,16 @@ abstract class BaseRepository implements RepositoryInterface
                 ]
             );
         } catch (\Throwable $e) {
+            if ($strict) {
+                throw MaterializedViewException::creationFailed($view, $query, $e);
+            }
             Log::error('Erro Register Materialized View', [$e->getMessage()]);
         }
     }
 
     protected function materializedViewExists(string $view): bool
     {
-        $result = DB::select("
+        $result = $this->connection()->select("
             SELECT 1 FROM pg_matviews WHERE schemaname = 'public' AND matviewname = ?
         ", [$view]);
 
@@ -2080,10 +2376,21 @@ abstract class BaseRepository implements RepositoryInterface
     /**
      * Before dispara ANTES do refresh.
      * After  dispara DEPOIS do refresh.
+     *
+     * Conexões deliberadamente diferentes (ver createSingleMaterializedView()):
+     *  - REFRESH MATERIALIZED VIEW → connection() (conexão do model, onde a
+     *    view física existe).
+     *  - UPDATE em `materialized_views` (last_refreshed_at) → DB (conexão
+     *    default): apenas atualiza o registro administrativo central; não
+     *    afeta a view em si.
+     *
+     * @param bool $strict Quando true, propaga MaterializedViewException em vez
+     *                     de apenas logar. Use em comandos artisan (falha-rápido);
+     *                     o job de refresh mantém o default false (resiliente).
      */
-    public function refreshMaterializedViews(?string $view = null, bool $concurrently = true): void
+    public function refreshMaterializedViews(?string $view = null, bool $concurrently = true, bool $strict = false): void
     {
-        $this->createMaterializedViews();
+        $this->createMaterializedViews($strict);
 
         $views = $view ? [$view] : array_keys($this->registerViews());
 
@@ -2095,8 +2402,9 @@ abstract class BaseRepository implements RepositoryInterface
 
                 $sql = "REFRESH MATERIALIZED VIEW {$v};";
 
-                DB::statement($sql);
+                $this->connection()->statement($sql);
 
+                // Catálogo administrativo central (conexão default) — ver docblock.
                 DB::table('materialized_views')
                     ->where('name', $v)
                     ->update(['last_refreshed_at' => now()]);
@@ -2104,6 +2412,9 @@ abstract class BaseRepository implements RepositoryInterface
                 event(new AfterRefreshMaterializedViewsJobEvent($v));
 
             } catch (\Throwable $e) {
+                if ($strict) {
+                    throw MaterializedViewException::refreshFailed($v, $e);
+                }
                 Log::error("Erro ao refresh da materialized view [{$v}]: " . $e->getMessage());
             }
         }
@@ -2115,7 +2426,7 @@ abstract class BaseRepository implements RepositoryInterface
     {
         foreach ($this->registerViews() as $view => $query) {
             if ($this->materializedViewExists($view)) {
-                DB::statement("DROP MATERIALIZED VIEW IF EXISTS {$view};");
+                $this->connection()->statement("DROP MATERIALIZED VIEW IF EXISTS {$view};");
             }
         }
     }
@@ -2136,7 +2447,7 @@ abstract class BaseRepository implements RepositoryInterface
                 $sql = is_array($views[$view]) ? $views[$view]['sql'] : $views[$view];
                 $this->createSingleMaterializedView($view, $sql);
             } else {
-                Log::warning("useMaterializedView: view [{$view}] não encontrada em registerViews(). A query pode falhar.");
+                throw MaterializedViewException::viewNotFound($view);
             }
         }
 
@@ -2144,108 +2455,30 @@ abstract class BaseRepository implements RepositoryInterface
     }
 
     /**
-     * Retorna um query builder para a view ativa com o scope de subtenant
-     * aplicado automaticamente, baseado na SharingPolicy do model.
+     * Retorna um query builder para a view ativa, usando a conexão do model.
      *
-     * Substitui todos os DB::table($this->activeView) diretos, garantindo
-     * que nenhuma consulta a uma view escape sem o filtro de isolamento.
+     * Passa a query pelo hook applyViewScope(), permitindo que repositórios
+     * filhos apliquem regras de isolamento sem que o package conheça essa regra.
      */
     protected function viewQuery(): \Illuminate\Database\Query\Builder
     {
-        $query = DB::table($this->activeView);
+        $query = $this->connection()->table($this->activeView);
         return $this->applyViewScope($query);
     }
 
     /**
-     * Aplica o filtro de subtenant no query builder da view.
+     * Hook de escopo para views materializadas.
      *
-     * Lê a SharingPolicy diretamente do model do repository —
-     * zero configuração necessária no repository filho.
+     * Default: não filtra nada (projeto sem isolamento). Repositórios filhos
+     * sobrescrevem este método — diretamente ou via trait — para aplicar regras
+     * de isolamento sobre a query da view.
      *
-     * RESTRICTED   → WHERE sub_tenant_id = {filial_ativa}
-     * USER_FILIALS → WHERE sub_tenant_id IN {filiais_autorizadas_do_usuario}
-     * ALL_FILIALS  → WHERE sub_tenant_id IN {todas_filiais_do_tenant}
-     *
-     * Sem contexto inicializado → WHERE 1 = 0 (falha segura — retorno vazio)
+     * Mantém o package agnóstico: a regra de isolamento vive fora do package.
      */
     protected function applyViewScope(
         \Illuminate\Database\Query\Builder $query
     ): \Illuminate\Database\Query\Builder {
-
-        // Sem subtenant inicializado → falha segura
-        if (!subTenancy()->isInitialized()) {
-            return $query->whereRaw('1 = 0');
-        }
-
-        // Lê a política do model — default RESTRICTED se não declarar
-        $model  = app($this->entityClass);
-        $policy = method_exists($model, 'sharingPolicy')
-            ? $model->sharingPolicy()
-            : SharingPolicy::RESTRICTED;
-
-        return match ($policy) {
-            SharingPolicy::RESTRICTED   => $this->applyRestrictedViewScope($query),
-            SharingPolicy::USER_FILIALS => $this->applyUserFilialsViewScope($query),
-            SharingPolicy::ALL_FILIALS  => $this->applyAllFilialsViewScope($query),
-        };
-    }
-
-    /**
-     * RESTRICTED — filtra pela filial ativa no momento.
-     */
-    private function applyRestrictedViewScope(
-        \Illuminate\Database\Query\Builder $query
-    ): \Illuminate\Database\Query\Builder {
-        $key = subTenancy()->getKey();
-
-        if (!$key) {
-            return $query->whereRaw('1 = 0');
-        }
-
-        return $query->where('sub_tenant_id', $key);
-    }
-
-    /**
-     * USER_FILIALS — filtra pelas filiais autorizadas do usuário.
-     * Quando multi_filial está ativo, considera todas as filiais do contexto.
-     */
-    private function applyUserFilialsViewScope(
-        \Illuminate\Database\Query\Builder $query
-    ): \Illuminate\Database\Query\Builder {
-        $authorizedIds = subTenancy()->getSharedSubTenant();
-
-        if (empty($authorizedIds)) {
-            return $query->whereRaw('1 = 0');
-        }
-
-        // multi_filial ativo com múltiplas filiais → agrega via SUM
-        // (a view tem 1 linha por filial — precisamos somar)
-        if (subTenancy()->getMultiFilial() && count($authorizedIds) > 1) {
-            return $query->whereIn('sub_tenant_id', $authorizedIds);
-        }
-
-        return $query->where('sub_tenant_id', $authorizedIds[0] ?? subTenancy()->getKey());
-    }
-
-    /**
-     * ALL_FILIALS — filtra por todas as filiais do tenant.
-     */
-    private function applyAllFilialsViewScope(
-        \Illuminate\Database\Query\Builder $query
-    ): \Illuminate\Database\Query\Builder {
-        if (!tenancy()->isInitialized()) {
-            return $query->whereRaw('1 = 0');
-        }
-
-        $allIds = SubTenant::where('tenant_id', tenancy()->getKey())
-            ->pluck('id')
-            ->toArray();
-
-        if (empty($allIds)) {
-            return $query->whereRaw('1 = 0');
-        }
-
-        return $query->whereIn('sub_tenant_id', $allIds);
+        return $query;
     }
 
     /**

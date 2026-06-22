@@ -28,6 +28,10 @@ class RefreshMaterializedViewsJob implements ShouldQueue
     {
         $this->repositoryClass = get_class($repository);
         $this->parameters = $parameters;
+
+        // Só dispara após o commit da transação ativa (se houver).
+        // Evita refresh de view com base em dados não-commitados/revertidos.
+        $this->afterCommit = true;
     }
 
     public function handle(): void

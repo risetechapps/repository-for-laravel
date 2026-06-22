@@ -5,6 +5,9 @@ namespace {{ namespace }};
 use RiseTechApps\Repository\Core\BaseRepository;
 use {{ namespaceModel }};
 
+/**
+ * @extends BaseRepository<{{ model }}>
+ */
 class {{ class }} extends BaseRepository implements {{ contract }}
 {
     public function entity(): string

@@ -29,6 +29,10 @@ class RegenerateCacheJob implements ShouldQueue
         $this->repositoryClass = get_class($repository);
         $this->method = $method;
         $this->parameters = $parameters;
+
+        // Só dispara após o commit da transação ativa (se houver).
+        // Evita regenerar cache com base em dados não-commitados/revertidos.
+        $this->afterCommit = true;
     }
 
     public function handle(): void
@@ -43,6 +47,10 @@ class RegenerateCacheJob implements ShouldQueue
                         return $repository->findById($this->parameters[0] ?? null);
                     case Repository::$methodAll:
                         return $repository->get();
+                    case Repository::$methodFirst:
+                        return $repository->first();
+                    case Repository::$methodDataTable:
+                        return $repository->dataTable();
                 }
             }, $method, $this->parameters);
         }

@@ -53,14 +53,17 @@ return [
         'unsupported_tag_drivers' => ['file', 'database', 'array'],
 
         /*
-        | Habilitar cache warming automático
+        | Habilitar cache warming automático após escritas (re-aquece o cache
+        | que o clearCacheForEntity acabou de limpar). Default true mantém o
+        | comportamento histórico; defina false para rebuild lazy (no próximo read).
         */
-        'warming_enabled' => false,
+        'warming_enabled' => true,
 
         /*
-        | Métodos para cache warming
+        | Métodos re-aquecidos pelo warming. Aceita: get, first, dataTable.
+        | (findById é ignorado aqui — depende de um id, indisponível no contexto.)
         */
-        'warming_methods' => ['get', 'first', 'findById'],
+        'warming_methods' => ['get', 'first'],
     ],
 
     /*

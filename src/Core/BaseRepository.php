@@ -3,7 +3,7 @@
 namespace RiseTechApps\Repository\Core;
 
 use Carbon\Carbon;
-vuse Illuminate\Database\Eloquent\SoftDeletes;
+use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;

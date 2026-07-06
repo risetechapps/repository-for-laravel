@@ -156,6 +156,11 @@ interface RepositoryInterface
     public function cacheForDays(int $days): static;
 
     /**
+     * Silencia os eventos do repositório na próxima operação (encadeável).
+     */
+    public function withoutEvents(): static;
+
+    /**
      * Cria uma definição de view materializada usando Query Builder.
      *
      * @param string $name Nome da view

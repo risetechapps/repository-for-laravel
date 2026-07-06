@@ -3,6 +3,17 @@
 Todas as alterações notáveis neste projeto serão documentadas neste arquivo.
 O formato é baseado em [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), e este projeto segue o [Versionamento Semântico](https://semver.org/lang/pt-BR/) (SemVer).
 
+## [Unreleased]
+
+### Added
+- `withoutEvents()` — silencia todos os eventos do repositório na próxima operação (encadeável, resetado após a operação). Desliga os eventos de escrita (`RepositoryCreating/Created`, `RepositoryUpdating/Updated`, `RepositoryDeleting/Deleted`) e os de limpeza de cache; com os eventos de escrita silenciados, o veto de listeners (`shouldCreate`/`shouldUpdate`/`shouldDelete`) também não se aplica.
+- Eventos `RepositoryBeforeClearingCacheEvent` / `RepositoryAfterClearingCacheEvent` passam a carregar o repositório (`$event->repository`) e são disparados por `clearCacheForEntity()`.
+- `fireEvent()` — ponto único interno de disparo de eventos (respeita `withoutEvents()`).
+
+### Fixed
+- **Loop infinito** em `clearCacheForEntity()` quando um listener de `RepositoryBefore/AfterClearingCacheEvent` chamava `clearCacheForEntity()` novamente: adicionado guard de reentrância estático por entidade — a chamada reentrante apenas refaz o flush e retorna, sem re-disparar eventos nem re-agendar jobs. Trava liberada em `finally` (segura em workers de fila / Octane).
+- `clearCacheForEntity()` instanciava `RepositoryBeforeClearingCacheEvent`/`RepositoryAfterClearingCacheEvent` sem o argumento `$repository` exigido pelo construtor (`ArgumentCountError`); agora passa `$this`.
+
 ## [3.0.0] - 2026-06-22
 
 ### ⚠️ Breaking Changes

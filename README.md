@@ -12,9 +12,10 @@ O **Laravel Repository** é um package para Laravel que abstrai a camada de dado
 - 🔄 **Soft Deletes** - `useTrashed()`, `onlyTrashed()`, `restore()` e `forceDelete()`
 - 📊 **Materialized Views** - Suporte nativo a views materializadas do PostgreSQL
 - 🔍 **Buscas Avançadas** - Filtros customizados, full-text, fuzzy search, JSONB
+- 🎯 **Scopes** - Scopes reutilizáveis no repositório (`scope()`), default scopes sempre-on (`$defaultScopes`) e opt-out por query (`withoutScope()`)
 - 📦 **Operações em Lote** - `storeMany`, `updateMany`, `deleteMany`, `upsert`
 - ⚡ **Performance** - Cursor pagination, selects otimizados, cache warming
-- 🔔 **Eventos** - Eventos para create/update/delete com listeners configuráveis
+- 🔔 **Eventos** - Eventos para create/update/delete e limpeza de cache, silenciáveis por operação (`withoutEvents()`) e à prova de loop
 - 🛡️ **Segurança** - Sanitização automática, validação de operadores e **de colunas** (SQL injection protection em buscas raw)
 - 🔌 **Conexão do model** - Consultas, views e transações respeitam a conexão definida no model
 - 🧩 **Agnóstico de tenancy** - Isolamento de views via hook `applyViewScope()`, sem acoplar regra de multi-tenancy
@@ -587,6 +588,97 @@ $summary = $repository->select(['status', DB::raw('COUNT(*) as total')])
 
 ---
 
+### Scopes customizados
+
+Defina filtros reutilizáveis como métodos `scope{Nome}()` no próprio repositório — o mesmo padrão dos *local scopes* do Eloquent, só que morando no repositório.
+
+```php
+class ClientRepository extends BaseRepository implements ClientRepositoryInterface
+{
+    public function entity(): string
+    {
+        return Client::class;
+    }
+
+    protected function scopeAtivos($query)
+    {
+        // O `return` é OPCIONAL — pode mutar o builder por referência, igual ao Eloquent.
+        return $query->where('status', 'ativo');
+    }
+
+    protected function scopeComSaldoMinimo($query, float $minimo)
+    {
+        return $query->where('saldo', '>=', $minimo);
+    }
+}
+```
+
+---
+
+#### `scope(string $nome, ...$parametros)`
+Aplica um scope definido no repositório. Encadeável e composável com os demais modificadores. Lança `BadMethodCallException` se o scope não existir.
+
+```php
+$ativos = $clientRepository->scope('ativos')->get();
+
+// Com parâmetros
+$vip = $clientRepository->scope('comSaldoMinimo', 1000)->get();
+
+// Encadeando vários scopes e modificadores (a ordem não importa)
+$resultado = $clientRepository
+    ->scope('ativos')
+    ->scope('comSaldoMinimo', 500)
+    ->latest()
+    ->get();
+```
+
+---
+
+#### `$defaultScopes` — scopes aplicados automaticamente em toda query
+Declare na subclasse os scopes que devem valer **sempre**, sem precisar chamar `scope()` a cada consulta (equivalente aos *global scopes* do Eloquent, no nível do repositório). São aplicados uma única vez no método terminal, apenas em queries de model (views materializadas usam `applyViewScope()`).
+
+```php
+class ClientRepository extends BaseRepository implements ClientRepositoryInterface
+{
+    // Sem parâmetros: 'ativos' entra em TODA query
+    protected array $defaultScopes = ['ativos'];
+
+    // Com parâmetros: ['nome' => [args]]
+    // protected array $defaultScopes = ['comSaldoMinimo' => [1000]];
+
+    public function entity(): string
+    {
+        return Client::class;
+    }
+
+    protected function scopeAtivos($query)
+    {
+        return $query->where('status', 'ativo');
+    }
+}
+```
+
+```php
+$clientRepository->get();                  // 'ativos' aplicado automaticamente
+$clientRepository->scope('comSaldoMinimo', 500)->get(); // 'ativos' + 'comSaldoMinimo'
+$clientRepository->where('cidade', 'SP')->first();      // 'ativos' aplicado automaticamente
+```
+
+---
+
+#### `withoutScope(string ...$nomes)`
+Ignora um ou mais `$defaultScopes` **somente nesta operação** (equivalente ao `withoutGlobalScope()` do Eloquent). O estado é resetado após a chamada — não vaza para a próxima. Como muda o resultado, integra a chave de cache.
+
+```php
+// Relatório administrativo que precisa ver inativos também
+$todos = $clientRepository->withoutScope('ativos')->get();
+
+// Ignora vários default scopes de uma vez
+$clientRepository->withoutScope('ativos', 'doTenant')->get();
+```
+
+---
+
 ### Paginação
 
 ---
@@ -956,6 +1048,34 @@ class ClientEloquentRepository extends BaseRepository implements ClientRepositor
 }
 ```
 
+##### Eventos de limpeza de cache
+
+`clearCacheForEntity()` dispara dois eventos, ambos carregando o repositório (`$event->repository`):
+
+- `RepositoryBeforeClearingCacheEvent` — antes do flush.
+- `RepositoryAfterClearingCacheEvent` — depois do flush (dispara mesmo que o agendamento dos jobs de warming/refresh falhe).
+
+```php
+use RiseTechApps\Repository\Events\RepositoryAfterClearingCacheEvent;
+
+Event::listen(RepositoryAfterClearingCacheEvent::class, function ($event) {
+    Log::info('Cache limpo para ' . $event->getEntityName());
+});
+```
+
+> **Proteção contra loop:** um listener desses eventos pode chamar `clearCacheForEntity()` novamente (inclusive de uma instância nova do repositório). Um **guard de reentrância estático por entidade** detecta o ciclo em andamento: a chamada reentrante apenas refaz o flush e retorna, **sem** re-disparar os eventos nem re-agendar os jobs — quebrando o loop `clearCacheForEntity → evento → clearCacheForEntity → ...`. A trava é liberada em `finally`, segura em workers de fila / Octane.
+
+#### `withoutEvents()`
+Silencia **todos** os eventos do repositório na próxima operação (encadeável; resetado após a operação). Vale para os eventos de escrita (`RepositoryCreating/Created`, `RepositoryUpdating/Updated`, `RepositoryDeleting/Deleted`) e os de limpeza de cache. Como os eventos de escrita não rodam, o veto de listeners (`shouldCreate`/`shouldUpdate`/`shouldDelete`) também não se aplica — a operação segue sem bloqueio.
+
+```php
+$clientRepository->withoutEvents()->store($data);
+$clientRepository->withoutEvents()->update($id, $data);
+$clientRepository->withoutEvents()->find($id)->delete();
+```
+
+> Não confunda com o guard de reentrância acima: o guard protege contra loop **sempre**, mesmo sem `withoutEvents()`. O `withoutEvents()` é controle explícito de quem chama o repositório.
+
 #### Cache warming
 Após uma escrita, o `RegenerateCacheJob` re-aquece o cache recém-limpo. Controlado por config:
 
@@ -1135,6 +1255,13 @@ $clientRepository
         ['column' => 'plano_id', 'operator' => 'IN',      'value' => [1, 2, 3]],
         ['column' => 'created_at','operator' => 'BETWEEN', 'value' => ['2024-01-01', '2024-12-31']],
     ]);
+
+// Scopes compostos (default scope 'ativos' entra automaticamente)
+$clientRepository
+    ->scope('comSaldoMinimo', 1000)
+    ->select(['id', 'nome', 'saldo'])
+    ->latest()
+    ->get();
 ```
 
 ---

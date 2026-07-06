@@ -3,8 +3,7 @@
 namespace RiseTechApps\Repository\Core;
 
 use Carbon\Carbon;
-use Illuminate\Database\Eloquent\Builder;
-use Illuminate\Database\Eloquent\SoftDeletes;
+vuse Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -20,6 +19,8 @@ use RiseTechApps\Repository\Events\RepositoryDeleted;
 use RiseTechApps\Repository\Events\RepositoryDeleting;
 use RiseTechApps\Repository\Events\RepositoryUpdated;
 use RiseTechApps\Repository\Events\RepositoryUpdating;
+use RiseTechApps\Repository\Events\RepositoryBeforeClearingCacheEvent;
+use RiseTechApps\Repository\Events\RepositoryAfterClearingCacheEvent;
 use RiseTechApps\Repository\Exception\CacheOperationException;
 use RiseTechApps\Repository\Exception\EntityNotFoundException;
 use RiseTechApps\Repository\Exception\InvalidFilterException;
@@ -146,6 +147,44 @@ abstract class BaseRepository implements RepositoryInterface
      */
     protected ?int $customCacheTtlMinutes = null;
 
+    /**
+     * Scopes do repositório aplicados automaticamente em TODA query (global
+     * scopes do repositório). Subclasses sobrescrevem para ligar scopes
+     * "sempre-on" sem precisar chamar scope() a cada consulta.
+     *
+     * Aceita duas formas, que podem ser misturadas:
+     *   protected array $defaultScopes = ['ativos'];                  // sem parâmetros
+     *   protected array $defaultScopes = ['comEstoqueMinimo' => [10]]; // com parâmetros
+     *
+     * Cada nome resolve para o método scope{Nome}() do repositório, exatamente
+     * como o scope() explícito. Aplicados uma única vez no terminal, em queries
+     * de model (Eloquent). Views materializadas usam applyViewScope().
+     */
+    protected array $defaultScopes = [];
+
+    /**
+     * Default scopes a IGNORAR somente na próxima operação (via withoutScope()).
+     * Resetado automaticamente pelo resetScope() após cada operação.
+     */
+    protected array $withoutScopes = [];
+
+    /**
+     * Quando false, fireEvent() vira no-op — silencia os eventos do repositório
+     * na próxima operação. Ligado via withoutEvents().
+     * Resetado automaticamente pelo resetScope() após cada operação.
+     */
+    protected bool $eventsEnabled = true;
+
+    /**
+     * Entidades com um ciclo de clearCacheForEntity() em andamento.
+     * Guard de reentrância estático (por classe de entidade): impede loop
+     * infinito quando um listener de RepositoryAfter/BeforeClearingCacheEvent
+     * dispara clearCacheForEntity() novamente — inclusive de uma instância nova
+     * do repositório (app(Repo::class)), que uma flag de instância não pegaria.
+     * @var array<string, bool>
+     */
+    protected static array $cacheClearingEntities = [];
+
     public function __construct()
     {
         $this->entityClass           = $this->entity();
@@ -196,20 +235,64 @@ abstract class BaseRepository implements RepositoryInterface
         $this->slowQueryThreshold = 0;
         $this->limitValue      = null;
         $this->customCacheTtlMinutes = null;
+        $this->withoutScopes   = [];
+        $this->eventsEnabled   = true;
         $this->entityClass     = $this->entity();
         $this->currentBuilder  = null;
     }
 
+    // =========================================================================
+    // EVENTOS
+    // =========================================================================
+
     /**
-     * Gera uma query limpa a partir do model. Os global scopes do model
-     * (se houver) são aplicados aqui pelo Eloquent.
+     * Ponto único de disparo dos eventos do repositório.
+     * Vira no-op quando withoutEvents() foi chamado para esta operação.
+     */
+    protected function fireEvent(object $event): void
+    {
+        if ($this->eventsEnabled) {
+            event($event);
+        }
+    }
+
+    /**
+     * Silencia os eventos do repositório na PRÓXIMA operação (encadeável).
+     * Não silencia o guard de reentrância do cache — apenas o disparo de eventos.
+     * Resetado automaticamente pelo resetScope() após cada operação terminal.
+     *
+     * Uso:
+     *   $repository->withoutEvents()->update($id, $data);
+     *   $repository->withoutEvents()->store($data);
+     */
+    public function withoutEvents(): static
+    {
+        $this->eventsEnabled = false;
+        return $this;
+    }
+
+    /**
+     * Query base encadeável, SEM o escopo de soft-delete/limit aplicado.
+     *
+     * É o ponto de partida dos modificadores encadeáveis (where, select, scope,
+     * latest, ...). O escopo NÃO é aplicado aqui de propósito: aplicá-lo durante
+     * o encadeamento "assaria" o estado de onlyTrashed()/limit() no momento da
+     * chamada, tornando o resultado dependente da ordem das chamadas. O escopo é
+     * aplicado uma única vez, no método terminal, via newQuery().
+     */
+    protected function baseQuery()
+    {
+        return $this->currentBuilder ?? app($this->entityClass)->newQuery();
+    }
+
+    /**
+     * Query pronta para o método terminal: a base encadeável com o escopo de
+     * soft-delete/limit aplicado exatamente uma vez. Os global scopes do model
+     * (se houver) são aplicados pelo Eloquent na execução.
      */
     protected function newQuery()
     {
-        // Se já iniciamos um builder (via select() ou relationships()), usamos ele.
-        // Caso contrário, iniciamos um do zero.
-        $builder = $this->currentBuilder ?? app($this->entityClass)->newQuery();
-        return $this->applyQueryScope($builder);
+        return $this->applyQueryScope($this->baseQuery());
     }
 
     /**
@@ -281,6 +364,47 @@ abstract class BaseRepository implements RepositoryInterface
             $query = $query->limit($this->limitValue);
         }
 
+        return $this->applyDefaultScopes($query);
+    }
+
+    /**
+     * Aplica os scopes default ($defaultScopes) — os global scopes do
+     * repositório. Roda apenas em queries de model (Eloquent\Builder); views
+     * materializadas têm seu próprio applyViewScope(), então são ignoradas aqui.
+     *
+     * Cada scope listado em withoutScope() é pulado para esta operação.
+     */
+    private function applyDefaultScopes($query)
+    {
+        if (empty($this->defaultScopes)
+            || !$query instanceof \Illuminate\Database\Eloquent\Builder) {
+            return $query;
+        }
+
+        foreach ($this->defaultScopes as $name => $args) {
+            // Forma sem parâmetros: ['ativos'] → chave inteira, valor é o nome.
+            if (is_int($name)) {
+                $name = $args;
+                $args = [];
+            }
+
+            if (in_array($name, $this->withoutScopes, true)) {
+                continue;
+            }
+
+            $method = 'scope' . ucfirst($name);
+
+            if (!method_exists($this, $method)) {
+                throw new \BadMethodCallException(
+                    "Default scope [{$name}] não existe no repository [" . get_class($this) . "]"
+                );
+            }
+
+            // Igual ao scope() explícito: tolera scope sem return.
+            $result = $this->$method($query, ...$args);
+            $query  = $result ?? $query;
+        }
+
         return $query;
     }
 
@@ -325,11 +449,12 @@ abstract class BaseRepository implements RepositoryInterface
         $entityClass = $this->getEntityClassName();
 
         $queryState = [
-            'params'      => $parameters,
-            'with'        => $this->relationships,
-            'tags'        => $this->tags,
-            'onlyTrashed' => $this->onlyTrashedMode,
-            'activeView'  => $this->activeView,
+            'params'        => $parameters,
+            'with'          => $this->relationships,
+            'tags'          => $this->tags,
+            'onlyTrashed'   => $this->onlyTrashedMode,
+            'activeView'    => $this->activeView,
+            'withoutScopes' => $this->withoutScopes,
         ];
 
         $paramsHash = ':' . md5(json_encode($queryState, JSON_THROW_ON_ERROR));
@@ -341,7 +466,7 @@ abstract class BaseRepository implements RepositoryInterface
         return $name;
     }
 
-    protected function getEntityClassName(): string
+    public function getEntityClassName(): string
     {
         return ltrim($this->entity(), '\\');
     }
@@ -439,26 +564,48 @@ abstract class BaseRepository implements RepositoryInterface
 
     public function clearCacheForEntity(string $method = '', array $parameters = []): void
     {
-        $this->flushEntityCache();
+        $entity = $this->getEntityClassName();
+
+        // Já dentro de um ciclo de clear desta entidade (chamada reentrante vinda
+        // de um listener de RepositoryBefore/AfterClearingCacheEvent): faz apenas
+        // o flush e retorna, sem re-disparar eventos nem re-agendar jobs. Quebra
+        // o loop infinito clearCacheForEntity → evento → clearCacheForEntity → ...
+        if (!empty(self::$cacheClearingEntities[$entity])) {
+            $this->flushEntityCache();
+            return;
+        }
+
+        self::$cacheClearingEntities[$entity] = true;
 
         try {
-            // Cache warming controlado por config — re-aquece o cache recém-limpo.
-            if (config('repository.cache.warming_enabled', true)) {
-                $methods = $this->resolveWarmingMethods();
+            $this->fireEvent(new RepositoryBeforeClearingCacheEvent($this));
 
-                if (!empty($methods)) {
-                    dispatch(new RegenerateCacheJob($this, $methods));
+            $this->flushEntityCache();
+
+            try {
+                // Cache warming controlado por config — re-aquece o cache recém-limpo.
+                if (config('repository.cache.warming_enabled', true)) {
+                    $methods = $this->resolveWarmingMethods();
+
+                    if (!empty($methods)) {
+                        dispatch(new RegenerateCacheJob($this, $methods));
+                    }
                 }
+
+                // Só refaz views se o repositório de fato declarar alguma.
+                // Evita job e serialização de auth desnecessários em repos sem view.
+                if (!empty($this->registerViews())) {
+                    dispatch(new RefreshMaterializedViewsJob($this, ['auth' => auth()->user()]));
+                }
+            } catch (\Exception $exception) {
+                Log::error("Error processing cache clearing for {$entity}: " . $exception->getMessage());
             }
 
-            // Só refaz views se o repositório de fato declarar alguma.
-            // Evita job e serialização de auth desnecessários em repos sem view.
-            if (!empty($this->registerViews())) {
-                dispatch(new RefreshMaterializedViewsJob($this, ['auth' => auth()->user()]));
-            }
-
-        } catch (\Exception $exception) {
-            Log::error("Error processing cache clearing for {$this->getEntityClassName()}: " . $exception->getMessage());
+            $this->fireEvent(new RepositoryAfterClearingCacheEvent($this));
+        } finally {
+            // try/finally garante liberação da trava mesmo em exceção —
+            // seguro em workers de fila / Octane (instância reutilizada).
+            unset(self::$cacheClearingEntities[$entity]);
         }
     }
 
@@ -588,7 +735,7 @@ abstract class BaseRepository implements RepositoryInterface
         // Se já temos um builder em andamento, usa ele
         if ($this->currentBuilder) {
             $result = $this->rememberCache(function () {
-                return $this->currentBuilder->first();
+                return $this->applyQueryScope($this->currentBuilder)->first();
             }, Repository::$methodFirst);
 
             $this->resetScope();
@@ -720,7 +867,7 @@ abstract class BaseRepository implements RepositoryInterface
      */
     public function whereDate(string $column, string $operator, $value): static
     {
-        $query = $this->shouldUseView() ? $this->viewQuery() : $this->newQuery();
+        $query = $this->shouldUseView() ? $this->viewQuery() : $this->baseQuery();
         $this->currentBuilder = $query->whereDate($column, $operator, $value);
         return $this;
     }
@@ -740,7 +887,7 @@ abstract class BaseRepository implements RepositoryInterface
     public function where(string $column, $operator = null, $value = null): static
     {
         // Se estiver usando view materializada, usa viewQuery()
-        $query = $this->shouldUseView() ? $this->viewQuery() : $this->newQuery();
+        $query = $this->shouldUseView() ? $this->viewQuery() : $this->baseQuery();
 
         if (func_num_args() === 2) {
             $this->currentBuilder = $query->where($column, $operator);
@@ -763,7 +910,7 @@ abstract class BaseRepository implements RepositoryInterface
      */
     public function whereIn(string $column, array $values): static
     {
-        $query = $this->shouldUseView() ? $this->viewQuery() : $this->newQuery();
+        $query = $this->shouldUseView() ? $this->viewQuery() : $this->baseQuery();
         $this->currentBuilder = $query->whereIn($column, $values);
         return $this;
     }
@@ -781,7 +928,7 @@ abstract class BaseRepository implements RepositoryInterface
      */
     public function whereBetween(string $column, array $values): static
     {
-        $query = $this->shouldUseView() ? $this->viewQuery() : $this->newQuery();
+        $query = $this->shouldUseView() ? $this->viewQuery() : $this->baseQuery();
         $this->currentBuilder = $query->whereBetween($column, $values);
         return $this;
     }
@@ -799,7 +946,7 @@ abstract class BaseRepository implements RepositoryInterface
      */
     public function groupBy(string|array $columns): static
     {
-        $this->currentBuilder = $this->newQuery()->groupBy($columns);
+        $this->currentBuilder = $this->baseQuery()->groupBy($columns);
         return $this;
     }
 
@@ -874,7 +1021,7 @@ abstract class BaseRepository implements RepositoryInterface
      */
     public function latest(string $column = 'created_at'): static
     {
-        $this->currentBuilder  = $this->newQuery()->latest($column);
+        $this->currentBuilder  = $this->baseQuery()->latest($column);
         return $this;
     }
 
@@ -887,7 +1034,7 @@ abstract class BaseRepository implements RepositoryInterface
      */
     public function oldest(string $column = 'created_at'): static
     {
-        $this->currentBuilder  = $this->newQuery()->oldest($column);
+        $this->currentBuilder  = $this->baseQuery()->oldest($column);
         return $this;
     }
 
@@ -901,7 +1048,7 @@ abstract class BaseRepository implements RepositoryInterface
      */
     public function withCount(string|array $relations): static
     {
-        $this->currentBuilder  = $this->newQuery()->withCount($relations);
+        $this->currentBuilder  = $this->baseQuery()->withCount($relations);
         return $this;
     }
 
@@ -938,7 +1085,7 @@ abstract class BaseRepository implements RepositoryInterface
         if ($this->currentBuilder) {
             $this->currentBuilder = $this->currentBuilder->orderBy($column, $order);
         } else {
-            $query = $this->shouldUseView() ? $this->viewQuery() : $this->newQuery();
+            $query = $this->shouldUseView() ? $this->viewQuery() : $this->baseQuery();
             $this->currentBuilder = $query->orderBy($column, $order);
         }
 
@@ -1014,8 +1161,9 @@ abstract class BaseRepository implements RepositoryInterface
             $searchableFields = $request->get('searchable_fields', []);
 
             // Se já temos um builder em andamento (de where(), orderBy(), etc), usa ele
+            // — aplicando o escopo de soft-delete/limit uma única vez, como nos demais terminais.
             if ($this->currentBuilder) {
-                $query = $this->currentBuilder;
+                $query = $this->applyQueryScope($this->currentBuilder);
             } else {
                 $query = $this->viewQuery();
             }
@@ -1102,7 +1250,7 @@ abstract class BaseRepository implements RepositoryInterface
             if ($this->currentBuilder) {
                 $this->currentBuilder = $callback($this->currentBuilder);
             } else {
-                $query = $this->shouldUseView() ? $this->viewQuery() : $this->newQuery();
+                $query = $this->shouldUseView() ? $this->viewQuery() : $this->baseQuery();
                 $this->currentBuilder = $callback($query);
             }
         }
@@ -1126,7 +1274,7 @@ abstract class BaseRepository implements RepositoryInterface
             $columns[] = 'id';
         }
 
-        $this->currentBuilder = $this->newQuery()->select($columns);
+        $this->currentBuilder = $this->baseQuery()->select($columns);
         return $this;
     }
 
@@ -1168,7 +1316,7 @@ abstract class BaseRepository implements RepositoryInterface
 
         // Evento antes de criar
         $creatingEvent = new RepositoryCreating($this, null, $data, 'creating');
-        event($creatingEvent);
+        $this->fireEvent($creatingEvent);
 
         if (!$creatingEvent->shouldCreate) {
             return null;
@@ -1176,8 +1324,9 @@ abstract class BaseRepository implements RepositoryInterface
 
         $created = $this->newQuery()->create($data);
 
+
         // Evento após criar
-        event(new RepositoryCreated($this, $created, $data, 'created'));
+        $this->fireEvent(new RepositoryCreated($this, $created, $data, 'created'));
 
         $this->clearCacheForEntity();
         return $created;
@@ -1283,7 +1432,7 @@ abstract class BaseRepository implements RepositoryInterface
 
         // Evento antes de atualizar
         $updatingEvent = new RepositoryUpdating($this, $model, $data, $changes, 'updating');
-        event($updatingEvent);
+        $this->fireEvent($updatingEvent);
 
         if (!$updatingEvent->shouldUpdate) {
             return false;
@@ -1295,7 +1444,7 @@ abstract class BaseRepository implements RepositoryInterface
         $model->fresh();
 
         // Evento após atualizar
-        event(new RepositoryUpdated($this, $model, $data, $changes, 'updated'));
+        $this->fireEvent(new RepositoryUpdated($this, $model, $data, $changes, 'updated'));
 
         $this->clearCacheForEntity();
 
@@ -1495,7 +1644,7 @@ abstract class BaseRepository implements RepositoryInterface
 
         // Evento antes de deletar
         $deletingEvent = new RepositoryDeleting($this, $model, [], 'deleting');
-        event($deletingEvent);
+        $this->fireEvent($deletingEvent);
 
         if (!$deletingEvent->shouldDelete) {
             return false;
@@ -1508,7 +1657,7 @@ abstract class BaseRepository implements RepositoryInterface
         $deleted = $model->delete();
 
         // Evento após deletar (soft delete)
-        event(new RepositoryDeleted($this, $model, [], 'deleted', true));
+        $this->fireEvent(new RepositoryDeleted($this, $model, [], 'deleted', true));
 
         $this->clearCacheForEntity();
 
@@ -1896,8 +2045,30 @@ abstract class BaseRepository implements RepositoryInterface
             );
         }
 
-        $this->currentBuilder = $this->$method($this->newQuery(), ...$parameters);
+        // Igual aos local scopes do Eloquent: o scope pode muta    r o builder por
+        // referência e não retornar nada. Se não retornar, reaproveitamos o
+        // builder que passamos — evita o footgun de "esqueci o return".
+        $query  = $this->baseQuery();
+        $result = $this->$method($query, ...$parameters);
+        $this->currentBuilder = $result ?? $query;
 
+        return $this;
+    }
+
+    /**
+     * Ignora um ou mais scopes default ($defaultScopes) somente nesta operação.
+     * Análogo ao withoutGlobalScope() do Eloquent.
+     *
+     * Uso:
+     *   $repository->withoutScope('ativos')->get();          // ignora um
+     *   $repository->withoutScope('ativos', 'doTenant')->get(); // ignora vários
+     *
+     * @param string ...$scopeNames Nomes dos default scopes a ignorar
+     * @return static
+     */
+    public function withoutScope(string ...$scopeNames): static
+    {
+        $this->withoutScopes = array_merge($this->withoutScopes, $scopeNames);
         return $this;
     }
 
@@ -1925,7 +2096,7 @@ abstract class BaseRepository implements RepositoryInterface
             $formattedColumns[] = 'id';
         }
 
-        $this->currentBuilder  = $this->newQuery()->select($formattedColumns);
+        $this->currentBuilder  = $this->baseQuery()->select($formattedColumns);
 
         return $this;
     }
@@ -1943,7 +2114,7 @@ abstract class BaseRepository implements RepositoryInterface
      */
     public function selectRaw(string $expression): static
     {
-        $query = $this->shouldUseView() ? $this->viewQuery() : $this->newQuery();
+        $query = $this->shouldUseView() ? $this->viewQuery() : $this->baseQuery();
         $this->currentBuilder = $query->selectRaw($expression);
         return $this;
     }
@@ -1971,7 +2142,7 @@ abstract class BaseRepository implements RepositoryInterface
             }
         }
 
-        $this->currentBuilder  = $this->newQuery()->with($this->relationships);
+        $this->currentBuilder  = $this->baseQuery()->with($this->relationships);
 
         return $this;
     }
@@ -2394,11 +2565,11 @@ abstract class BaseRepository implements RepositoryInterface
 
         $views = $view ? [$view] : array_keys($this->registerViews());
 
-        event(new BeforeRefreshAllMaterializedViewsJobEvent());
+        $this->fireEvent(new BeforeRefreshAllMaterializedViewsJobEvent());
 
         foreach ($views as $v) {
             try {
-                event(new BeforeRefreshMaterializedViewsJobEvent($v));
+                $this->fireEvent(new BeforeRefreshMaterializedViewsJobEvent($v));
 
                 $sql = "REFRESH MATERIALIZED VIEW {$v};";
 
@@ -2409,7 +2580,7 @@ abstract class BaseRepository implements RepositoryInterface
                     ->where('name', $v)
                     ->update(['last_refreshed_at' => now()]);
 
-                event(new AfterRefreshMaterializedViewsJobEvent($v));
+                $this->fireEvent(new AfterRefreshMaterializedViewsJobEvent($v));
 
             } catch (\Throwable $e) {
                 if ($strict) {
@@ -2419,7 +2590,7 @@ abstract class BaseRepository implements RepositoryInterface
             }
         }
 
-        event(new AfterRefreshAllMaterializedViewsJobEvent());
+        $this->fireEvent(new AfterRefreshAllMaterializedViewsJobEvent());
     }
 
     public function cleanMaterializedView(): void

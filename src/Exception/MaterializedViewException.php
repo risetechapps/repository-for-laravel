@@ -6,32 +6,22 @@ namespace RiseTechApps\Repository\Exception;
 
 class MaterializedViewException extends RepositoryException
 {
-    /**
-     * Nome da view materializada.
-     */
-    protected ?string $viewName;
-
-    /**
-     * Operação que estava sendo executada.
-     */
-    protected string $operation;
-
     public function __construct(
         string $message,
-        string $operation = '',
-        ?string $viewName = null,
-        ?\Throwable $previous = null
+        protected string $operation = '',
+        protected ?string $viewName = null,
+         ?\Throwable $previous = null
     ) {
         $this->operation = $operation;
         $this->viewName = $viewName;
 
-        if ($viewName !== null) {
-            $message = "[View: {$viewName}] {$message}";
+        if ($this->viewName !== null) {
+            $message = "[View: {$this->viewName}] {$message}";
         }
 
         parent::__construct($message, 0, $previous, [
-            'view' => $viewName,
-            'operation' => $operation,
+            'view' => $this->viewName,
+            'operation' => $this->operation,
         ]);
     }
 

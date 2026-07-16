@@ -30,13 +30,7 @@ use RiseTechApps\Repository\Jobs\RefreshMaterializedViewsJob;
 use RiseTechApps\Repository\Jobs\RegenerateCacheJob;
 use RiseTechApps\Repository\Repository;
 
-/**
- * @template TModel of \Illuminate\Database\Eloquent\Model
- *
- * Repositórios filhos podem fixar o tipo do model para ganhar autocomplete e
- * análise estática precisa nos retornos:
- *
- *   /** @extends BaseRepository<\App\Models\Client> *\/
+/** @extends BaseRepository<\App\Models\Client> *\/
  *   class ClientEloquentRepository extends BaseRepository { ... }
  */
 abstract class BaseRepository implements RepositoryInterface
@@ -47,12 +41,12 @@ abstract class BaseRepository implements RepositoryInterface
     protected $currentBuilder = null;
     protected Carbon $tll;
     protected $driver;
-    protected bool $supportTag      = false;
-    protected bool $permission      = false;
-    protected $relationships        = [];
+    protected bool $supportTag = false;
+    protected bool $permission = false;
+    protected $relationships = [];
     protected string|int $id;
     protected bool $hasContainsSoftDelete = false;
-    protected array $tags           = [];
+    protected array $tags = [];
 
     /**
      * Flag para filtrar somente registros soft-deleted.
@@ -187,10 +181,10 @@ abstract class BaseRepository implements RepositoryInterface
 
     public function __construct()
     {
-        $this->entityClass           = $this->entity();
+        $this->entityClass = $this->entity();
         $this->hasContainsSoftDelete = $this->containsSoftDelete();
-        $this->tll                  = Carbon::now()->addMinutes($this->defaultCacheTtlMinutes);
-        $this->supportTag           = $this->supportsTags();
+        $this->tll = Carbon::now()->addMinutes($this->defaultCacheTtlMinutes);
+        $this->supportTag = $this->supportsTags();
     }
 
     // =========================================================================
@@ -226,19 +220,19 @@ abstract class BaseRepository implements RepositoryInterface
     protected function resetScope(): void
     {
         $this->onlyTrashedMode = false;
-        $this->permission      = false;
-        $this->relationships   = [];
-        $this->tags            = [];
-        $this->activeView      = null;
-        $this->bypassCache     = false;
-        $this->cacheCondition   = null;
+        $this->permission = false;
+        $this->relationships = [];
+        $this->tags = [];
+        $this->activeView = null;
+        $this->bypassCache = false;
+        $this->cacheCondition = null;
         $this->slowQueryThreshold = 0;
-        $this->limitValue      = null;
+        $this->limitValue = null;
         $this->customCacheTtlMinutes = null;
-        $this->withoutScopes   = [];
-        $this->eventsEnabled   = true;
-        $this->entityClass     = $this->entity();
-        $this->currentBuilder  = null;
+        $this->withoutScopes = [];
+        $this->eventsEnabled = true;
+        $this->entityClass = $this->entity();
+        $this->currentBuilder = null;
     }
 
     // =========================================================================
@@ -317,7 +311,7 @@ abstract class BaseRepository implements RepositoryInterface
 
     public function useTrashed(bool $permission): static
     {
-        $this->permission      = $permission;
+        $this->permission = $permission;
         $this->onlyTrashedMode = false;
         return $this;
     }
@@ -341,7 +335,7 @@ abstract class BaseRepository implements RepositoryInterface
         }
 
         $this->onlyTrashedMode = true;
-        $this->permission      = false;
+        $this->permission = false;
         return $this;
     }
 
@@ -392,17 +386,17 @@ abstract class BaseRepository implements RepositoryInterface
                 continue;
             }
 
-            $method = 'scope' . ucfirst($name);
+            $method = 'scope' . ucfirst((string)$name);
 
             if (!method_exists($this, $method)) {
                 throw new \BadMethodCallException(
-                    "Default scope [{$name}] não existe no repository [" . get_class($this) . "]"
+                    "Default scope [{$name}] não existe no repository [" . static::class . "]"
                 );
             }
 
             // Igual ao scope() explícito: tolera scope sem return.
             $result = $this->$method($query, ...$args);
-            $query  = $result ?? $query;
+            $query = $result ?? $query;
         }
 
         return $query;
@@ -449,18 +443,18 @@ abstract class BaseRepository implements RepositoryInterface
         $entityClass = $this->getEntityClassName();
 
         $queryState = [
-            'params'        => $parameters,
-            'with'          => $this->relationships,
-            'tags'          => $this->tags,
-            'onlyTrashed'   => $this->onlyTrashedMode,
-            'activeView'    => $this->activeView,
+            'params' => $parameters,
+            'with' => $this->relationships,
+            'tags' => $this->tags,
+            'onlyTrashed' => $this->onlyTrashedMode,
+            'activeView' => $this->activeView,
             'withoutScopes' => $this->withoutScopes,
         ];
 
         $paramsHash = ':' . md5(json_encode($queryState, JSON_THROW_ON_ERROR));
         $name = "repo:{$entityClass}:{$method}{$paramsHash}";
 
-        if ($this->Trashed())       $name .= ':trashed';
+        if ($this->Trashed()) $name .= ':trashed';
         if ($this->onlyTrashedMode) $name .= ':only_trashed';
 
         return $name;
@@ -468,7 +462,7 @@ abstract class BaseRepository implements RepositoryInterface
 
     public function getEntityClassName(): string
     {
-        return ltrim($this->entity(), '\\');
+        return ltrim((string)$this->entity(), '\\');
     }
 
     protected function supportsTags(): bool
@@ -646,8 +640,8 @@ abstract class BaseRepository implements RepositoryInterface
     protected function resolveWarmingMethods(): array
     {
         $map = [
-            'get'       => Repository::$methodAll,
-            'first'     => Repository::$methodFirst,
+            'get' => Repository::$methodAll,
+            'first' => Repository::$methodFirst,
             'dataTable' => Repository::$methodDataTable,
         ];
 
@@ -734,26 +728,20 @@ abstract class BaseRepository implements RepositoryInterface
     {
         // Se já temos um builder em andamento, usa ele
         if ($this->currentBuilder) {
-            $result = $this->rememberCache(function () {
-                return $this->applyQueryScope($this->currentBuilder)->first();
-            }, Repository::$methodFirst);
+            $result = $this->rememberCache(fn() => $this->applyQueryScope($this->currentBuilder)->first(), Repository::$methodFirst);
 
             $this->resetScope();
             return $result;
         }
 
         if ($this->shouldUseView()) {
-            $result = $this->rememberCache(function () {
-                return $this->viewQuery()->first();
-            }, Repository::$methodFirst);
+            $result = $this->rememberCache(fn() => $this->viewQuery()->first(), Repository::$methodFirst);
 
             $this->resetScope();
             return $result;
         }
 
-        $result = $this->rememberCache(function () {
-            return $this->newQuery()->first();
-        }, Repository::$methodFirst);
+        $result = $this->rememberCache(fn() => $this->newQuery()->first(), Repository::$methodFirst);
 
         $this->resetScope();
         return $result;
@@ -766,17 +754,13 @@ abstract class BaseRepository implements RepositoryInterface
     {
         if ($this->shouldUseView()) {
             // ✅ CORREÇÃO: Agora usa cache para views materializadas
-            $result = $this->rememberCache(function () {
-                return $this->viewQuery()->get();
-            }, Repository::$methodAll);
+            $result = $this->rememberCache(fn() => $this->viewQuery()->get(), Repository::$methodAll);
 
             $this->resetScope();
             return collect($result);
         }
 
-        $result = $this->rememberCache(function () {
-            return $this->newQuery()->get();
-        }, Repository::$methodAll);
+        $result = $this->rememberCache(fn() => $this->newQuery()->get(), Repository::$methodAll);
 
         $this->resetScope();
         return $result;
@@ -788,9 +772,7 @@ abstract class BaseRepository implements RepositoryInterface
      */
     public function findById($id)
     {
-        $result = $this->rememberCache(function () use ($id) {
-            return $this->newQuery()->find($id);
-        }, Repository::$methodFind, [$id]);
+        $result = $this->rememberCache(fn() => $this->newQuery()->find($id), Repository::$methodFind, [$id]);
 
         $this->resetScope();
         return $result;
@@ -952,9 +934,7 @@ abstract class BaseRepository implements RepositoryInterface
 
     public function findWhereEmail($valor)
     {
-        $result = $this->rememberCache(function () use ($valor) {
-            return $this->newQuery()->where('email', $valor)->get();
-        }, Repository::$methodFindWhereEmail, [$valor]);
+        $result = $this->rememberCache(fn() => $this->newQuery()->where('email', $valor)->get(), Repository::$methodFindWhereEmail, [$valor]);
 
         $this->resetScope();
         return $result;
@@ -965,17 +945,13 @@ abstract class BaseRepository implements RepositoryInterface
         if ($this->shouldUseView()) {
             // ✅ CORREÇÃO: Agora usa cache para views materializadas
             // E retorna objeto diretamente (não wrap em Collection)
-            $result = $this->rememberCache(function () use ($column, $valor) {
-                return $this->viewQuery()->where($column, $valor)->first();
-            }, Repository::$methodFindWhereFirst, [$column, $valor]);
+            $result = $this->rememberCache(fn() => $this->viewQuery()->where($column, $valor)->first(), Repository::$methodFindWhereFirst, [$column, $valor]);
 
             $this->resetScope();
             return $result;
         }
 
-        $result = $this->rememberCache(function () use ($column, $valor) {
-            return $this->newQuery()->where($column, $valor)->first();
-        }, Repository::$methodFindWhereFirst, [$column, $valor]);
+        $result = $this->rememberCache(fn() => $this->newQuery()->where($column, $valor)->first(), Repository::$methodFindWhereFirst, [$column, $valor]);
 
         $this->resetScope();
         return $result;
@@ -1021,7 +997,7 @@ abstract class BaseRepository implements RepositoryInterface
      */
     public function latest(string $column = 'created_at'): static
     {
-        $this->currentBuilder  = $this->baseQuery()->latest($column);
+        $this->currentBuilder = $this->baseQuery()->latest($column);
         return $this;
     }
 
@@ -1034,7 +1010,7 @@ abstract class BaseRepository implements RepositoryInterface
      */
     public function oldest(string $column = 'created_at'): static
     {
-        $this->currentBuilder  = $this->baseQuery()->oldest($column);
+        $this->currentBuilder = $this->baseQuery()->oldest($column);
         return $this;
     }
 
@@ -1048,15 +1024,13 @@ abstract class BaseRepository implements RepositoryInterface
      */
     public function withCount(string|array $relations): static
     {
-        $this->currentBuilder  = $this->baseQuery()->withCount($relations);
+        $this->currentBuilder = $this->baseQuery()->withCount($relations);
         return $this;
     }
 
     public function dataTable()
     {
-        $result = $this->rememberCache(function () {
-            return $this->newQuery()->get();
-        }, Repository::$methodDataTable);
+        $result = $this->rememberCache(fn() => $this->newQuery()->get(), Repository::$methodDataTable);
 
         $this->resetScope();
         return $result;
@@ -1107,9 +1081,9 @@ abstract class BaseRepository implements RepositoryInterface
             return $this->paginateWithView($totalPage);
         }
 
-        $request          = request();
-        $perPage          = $request->get('pagesize', $totalPage);
-        $search           = $request->get('search');
+        $request = request();
+        $perPage = $request->get('pagesize', $totalPage);
+        $search = $request->get('search');
         $searchableFields = $request->get('searchable_fields', []);
 
         $query = $this->newQuery();
@@ -1125,8 +1099,9 @@ abstract class BaseRepository implements RepositoryInterface
             });
         }
 
-        $sortColumn    = $this->resolveSortColumn($request->get('sort_column', 'id'));
-        $sortDirection = in_array(strtolower($request->get('sort_direction', 'asc')), ['asc', 'desc'])
+        $sortColumn = $this->resolveSortColumn($request->get('sort_column', 'id'));
+
+        $sortDirection = in_array(strtolower((string)$request->get('sort_direction', 'asc')), ['asc', 'desc'])
             ? $request->get('sort_direction', 'asc')
             : 'asc';
 
@@ -1137,12 +1112,12 @@ abstract class BaseRepository implements RepositoryInterface
         $this->resetScope();
 
         return [
-            'data'            => $data->items(),
+            'data' => $data->items(),
             'recordsFiltered' => $data->total(),
-            'recordsTotal'    => $data->total(),
-            'totalPages'      => $data->lastPage(),
-            'perPage'         => $data->perPage(),
-            'current_page'    => $data->currentPage(),
+            'recordsTotal' => $data->total(),
+            'totalPages' => $data->lastPage(),
+            'perPage' => $data->perPage(),
+            'current_page' => $data->currentPage(),
         ];
     }
 
@@ -1156,8 +1131,8 @@ abstract class BaseRepository implements RepositoryInterface
         $cacheKey = 'paginate_view_' . md5(serialize($request->all()) . ($this->currentBuilder ? spl_object_hash($this->currentBuilder) : ''));
 
         return $this->rememberCache(function () use ($totalPage, $request) {
-            $perPage          = $request->get('pagesize', $totalPage);
-            $search           = $request->get('search');
+            $perPage = $request->get('pagesize', $totalPage);
+            $search = $request->get('search');
             $searchableFields = $request->get('searchable_fields', []);
 
             // Se já temos um builder em andamento (de where(), orderBy(), etc), usa ele
@@ -1180,9 +1155,9 @@ abstract class BaseRepository implements RepositoryInterface
             }
 
             // Aplica ordenação do request se não houver ordenação manual
-            if (!$this->currentBuilder || !str_contains($query->toSql(), 'ORDER BY')) {
-                $sortColumn    = $this->resolveSortColumn($request->get('sort_column', 'id'));
-                $sortDirection = in_array(strtolower($request->get('sort_direction', 'asc')), ['asc', 'desc'])
+            if (!$this->currentBuilder || !str_contains((string)$query->toSql(), 'ORDER BY')) {
+                $sortColumn = $this->resolveSortColumn($request->get('sort_column', 'id'));
+                $sortDirection = in_array(strtolower((string)$request->get('sort_direction', 'asc')), ['asc', 'desc'])
                     ? $request->get('sort_direction', 'asc')
                     : 'asc';
                 $query->orderBy($sortColumn, $sortDirection);
@@ -1193,12 +1168,12 @@ abstract class BaseRepository implements RepositoryInterface
             $this->resetScope();
 
             return [
-                'data'            => $data->items(),
+                'data' => $data->items(),
                 'recordsFiltered' => $data->total(),
-                'recordsTotal'    => $data->total(),
-                'totalPages'      => $data->lastPage(),
-                'perPage'         => $data->perPage(),
-                'current_page'    => $data->currentPage(),
+                'recordsTotal' => $data->total(),
+                'totalPages' => $data->lastPage(),
+                'perPage' => $data->perPage(),
+                'current_page' => $data->currentPage(),
             ];
         }, Repository::$methodPaginate, [$request->all()]);
     }
@@ -1459,8 +1434,8 @@ abstract class BaseRepository implements RepositoryInterface
      *   $repository->updateMany(['status' => 'inativo'], ['plano_id' => 3]);
      *   $repository->updateMany(['ativo' => false], ['empresa_id' => 10, 'tipo' => 'free']);
      *
-     * @param array $data        Campos e valores a atualizar
-     * @param array $conditions  Condições WHERE (coluna => valor)
+     * @param array $data Campos e valores a atualizar
+     * @param array $conditions Condições WHERE (coluna => valor)
      */
     public function updateMany(array $data, array $conditions): int
     {
@@ -1502,9 +1477,7 @@ abstract class BaseRepository implements RepositoryInterface
      */
     public function firstOrCreate(array $attributes, array $values = [])
     {
-        $result = $this->rememberCache(function () use ($attributes) {
-            return $this->newQuery()->where($attributes)->first();
-        }, Repository::$methodFirst, [$attributes]);
+        $result = $this->rememberCache(fn() => $this->newQuery()->where($attributes)->first(), Repository::$methodFirst, [$attributes]);
 
         if ($result) {
             $this->resetScope();
@@ -1527,9 +1500,7 @@ abstract class BaseRepository implements RepositoryInterface
      */
     public function updateOrCreate(array $attributes, array $values = [])
     {
-        $result = $this->rememberCache(function () use ($attributes) {
-            return $this->newQuery()->where($attributes)->first();
-        }, Repository::$methodFirst, [$attributes]);
+        $result = $this->rememberCache(fn() => $this->newQuery()->where($attributes)->first(), Repository::$methodFirst, [$attributes]);
 
         if ($result) {
             $this->resetScope();
@@ -1661,7 +1632,7 @@ abstract class BaseRepository implements RepositoryInterface
 
         $this->clearCacheForEntity();
 
-        return (bool) $deleted;
+        return (bool)$deleted;
     }
 
     public function restore(): bool
@@ -1677,7 +1648,7 @@ abstract class BaseRepository implements RepositoryInterface
         $restored = $model->restore();
         $this->clearCacheForEntity();
 
-        return (bool) $restored;
+        return (bool)$restored;
     }
 
     public function forceDelete(): bool
@@ -1694,7 +1665,7 @@ abstract class BaseRepository implements RepositoryInterface
             $deleted = $model->forceDelete();
             $this->clearCacheForEntity();
 
-            return (bool) $deleted;
+            return (bool)$deleted;
         }
 
         return false;
@@ -1830,9 +1801,9 @@ abstract class BaseRepository implements RepositoryInterface
             return;
         }
 
-        $column   = $filter['column'];
+        $column = $filter['column'];
         $operator = strtoupper($filter['operator']);
-        $value    = $filter['value'] ?? null;
+        $value = $filter['value'] ?? null;
 
         // Validação de operador permitido
         if (!in_array($operator, $this->allowedOperators, true)) {
@@ -1888,7 +1859,7 @@ abstract class BaseRepository implements RepositoryInterface
      */
     public function findWhereJson(string $path, $value)
     {
-        $parts  = explode('.', $path);
+        $parts = explode('.', $path);
         $column = $this->guardColumn(array_shift($parts));
 
         // Operador JSON nativo do builder: cada segmento é escapado com
@@ -1897,11 +1868,9 @@ abstract class BaseRepository implements RepositoryInterface
         // pela validação de coluna — só a coluna base é validada.
         $selector = empty($parts) ? $column : $column . '->' . implode('->', $parts);
 
-        $result = $this->rememberCache(function () use ($selector, $value) {
-            return $this->newQuery()
-                ->where($selector, $value)
-                ->get();
-        }, Repository::$methodFindWhere, [['json_path' => $path, 'value' => $value]]);
+        $result = $this->rememberCache(fn() => $this->newQuery()
+            ->where($selector, $value)
+            ->get(), Repository::$methodFindWhere, [['json_path' => $path, 'value' => $value]]);
 
         $this->resetScope();
         return $result;
@@ -1919,7 +1888,7 @@ abstract class BaseRepository implements RepositoryInterface
      */
     public function searchFullText(string $query, array $columns)
     {
-        $columns = array_map(fn($column) => $this->guardColumn($column), $columns);
+        $columns = array_map($this->guardColumn(...), $columns);
 
         $result = $this->rememberCache(function () use ($query, $columns) {
             $searchTerm = $this->sanitizeFullTextQuery($query);
@@ -1953,12 +1922,10 @@ abstract class BaseRepository implements RepositoryInterface
     {
         $column = $this->guardColumn($column);
 
-        $result = $this->rememberCache(function () use ($term, $column) {
-            return $this->newQuery()
-                ->whereRaw("\"{$column}\" % ?", [$term])
-                ->orderByRaw("similarity(\"{$column}\", ?) DESC", [$term])
-                ->get();
-        }, Repository::$methodFindWhere, [['fuzzy' => $term, 'column' => $column]]);
+        $result = $this->rememberCache(fn() => $this->newQuery()
+            ->whereRaw("\"{$column}\" % ?", [$term])
+            ->orderByRaw("similarity(\"{$column}\", ?) DESC", [$term])
+            ->get(), Repository::$methodFindWhere, [['fuzzy' => $term, 'column' => $column]]);
 
         $this->resetScope();
         return $result;
@@ -2041,14 +2008,14 @@ abstract class BaseRepository implements RepositoryInterface
 
         if (!method_exists($this, $method)) {
             throw new \BadMethodCallException(
-                "Scope [{$scopeName}] não existe no repository [" . get_class($this) . "]"
+                "Scope [{$scopeName}] não existe no repository [" . static::class . "]"
             );
         }
 
         // Igual aos local scopes do Eloquent: o scope pode muta    r o builder por
         // referência e não retornar nada. Se não retornar, reaproveitamos o
         // builder que passamos — evita o footgun de "esqueci o return".
-        $query  = $this->baseQuery();
+        $query = $this->baseQuery();
         $result = $this->$method($query, ...$parameters);
         $this->currentBuilder = $result ?? $query;
 
@@ -2084,9 +2051,9 @@ abstract class BaseRepository implements RepositoryInterface
 
         $formattedColumns = array_map(function ($col) {
             if (str_contains($col, '.')) {
-                $parts       = explode('.', $col);
+                $parts = explode('.', $col);
                 $tableColumn = preg_replace('/[^a-z0-9_]/i', '', $parts[0]);
-                $jsonKey     = preg_replace('/[^a-z0-9_]/i', '', $parts[1]);
+                $jsonKey = preg_replace('/[^a-z0-9_]/i', '', $parts[1]);
                 return DB::raw("\"{$tableColumn}\"->>'{$jsonKey}' as \"{$col}\"");
             }
             return $col;
@@ -2096,7 +2063,7 @@ abstract class BaseRepository implements RepositoryInterface
             $formattedColumns[] = 'id';
         }
 
-        $this->currentBuilder  = $this->baseQuery()->select($formattedColumns);
+        $this->currentBuilder = $this->baseQuery()->select($formattedColumns);
 
         return $this;
     }
@@ -2142,7 +2109,7 @@ abstract class BaseRepository implements RepositoryInterface
             }
         }
 
-        $this->currentBuilder  = $this->baseQuery()->with($this->relationships);
+        $this->currentBuilder = $this->baseQuery()->with($this->relationships);
 
         return $this;
     }
@@ -2157,7 +2124,7 @@ abstract class BaseRepository implements RepositoryInterface
 
     /**
      * Define tags hierárquicas para cache.
- * Permite agrupar cache em níveis.
+     * Permite agrupar cache em níveis.
      *
      * Uso:
      *   $repository->withCacheTags(['clientes', 'clientes:ativos'])->get();
@@ -2287,8 +2254,8 @@ abstract class BaseRepository implements RepositoryInterface
         // Atualiza média
         $count = self::$metrics['total_queries'];
         self::$metrics['avg_query_time'] = (
-            (self::$metrics['avg_query_time'] * ($count - 1)) + $duration
-        ) / $count;
+                (self::$metrics['avg_query_time'] * ($count - 1)) + $duration
+            ) / $count;
 
         // Verifica slow query
         if ($this->slowQueryThreshold > 0 && $duration > $this->slowQueryThreshold) {
@@ -2453,7 +2420,7 @@ abstract class BaseRepository implements RepositoryInterface
 
         return [
             'name' => $name,
-            'sql'  => $sql,
+            'sql' => $sql,
         ];
     }
 
@@ -2463,8 +2430,8 @@ abstract class BaseRepository implements RepositoryInterface
     private function substituteBindings(string $sql, array $bindings): string
     {
         foreach ($bindings as $binding) {
-            $value = is_numeric($binding) ? $binding : "'" . addslashes($binding) . "'";
-            $sql = preg_replace('/\?/', $value, $sql, 1);
+            $value = is_numeric($binding) ? $binding : "'" . addslashes((string) $binding) . "'";
+            $sql = preg_replace('/\?/', $value, (string) $sql, 1);
         }
         return $sql;
     }
@@ -2521,10 +2488,10 @@ abstract class BaseRepository implements RepositoryInterface
             DB::table('materialized_views')->updateOrInsert(
                 ['name' => $view],
                 [
-                    'user_id'           => auth()->id(),
-                    'created_at'        => now(),
+                    'user_id' => auth()->id(),
+                    'created_at' => now(),
                     'last_refreshed_at' => now(),
-                    'active'            => true,
+                    'active' => true,
                 ]
             );
         } catch (\Throwable $e) {
@@ -2648,7 +2615,8 @@ abstract class BaseRepository implements RepositoryInterface
      */
     protected function applyViewScope(
         \Illuminate\Database\Query\Builder $query
-    ): \Illuminate\Database\Query\Builder {
+    ): \Illuminate\Database\Query\Builder
+    {
         return $query;
     }
 

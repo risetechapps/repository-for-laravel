@@ -130,7 +130,7 @@ class GenerateRepositoryCommand extends Command
 
     private function getModelNameOnly(): string
     {
-        $parts = explode('\\', $this->model);
+        $parts = explode('\\', (string) $this->model);
         return end($parts);
     }
 

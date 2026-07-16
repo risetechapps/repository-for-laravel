@@ -8,15 +8,10 @@ use Exception;
 
 class RepositoryException extends Exception
 {
-    /**
-     * Contexto adicional para debug.
-     */
-    protected array $context = [];
 
-    public function __construct(string $message = '', int $code = 0, ?Exception $previous = null, array $context = [])
+    public function __construct(string $message = '', int $code = 0, ?Exception $previous = null, protected array $context = [])
     {
         parent::__construct($message, $code, $previous);
-        $this->context = $context;
     }
 
     /**

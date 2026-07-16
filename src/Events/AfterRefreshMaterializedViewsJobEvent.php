@@ -8,10 +8,6 @@ class AfterRefreshMaterializedViewsJobEvent
 {
     use Dispatchable;
 
-    public string $nameView;
-
-    public function __construct( string $nameView)
-    {
-        $this->nameView = $nameView;
+    public function __construct(public string $nameView){
     }
 }

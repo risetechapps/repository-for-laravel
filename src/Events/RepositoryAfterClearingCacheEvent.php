@@ -11,13 +11,8 @@ class RepositoryAfterClearingCacheEvent
 {
     use Dispatchable;
 
-    public BaseRepository $repository;
-    public ?Model $model;
-
-    public function __construct(BaseRepository $repository, ?Model $model = null)
+    public function __construct(public BaseRepository $repository, public ?Model $model = null)
     {
-        $this->repository = $repository;
-        $this->model = $model;
     }
 
     /**

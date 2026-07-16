@@ -38,7 +38,7 @@ class Repository
         $repositoryContracts = [];
 
         foreach (array_keys($allBindings) as $contractName) {
-            if (str_contains($contractName, 'Repository') && is_subclass_of($contractName,'RiseTechApps\Repository\Contracts\RepositoryInterface')) {
+            if (str_contains((string) $contractName, 'Repository') && is_subclass_of($contractName,\RiseTechApps\Repository\Contracts\RepositoryInterface::class)) {
                 $repositoryContracts[] = $contractName;
             }
         }

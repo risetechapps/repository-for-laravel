@@ -7,11 +7,6 @@ namespace RiseTechApps\Repository\Exception;
 class InvalidFilterException extends RepositoryException
 {
     /**
-     * Filtro inválido que causou a exceção.
-     */
-    protected array $invalidFilter;
-
-    /**
      * Operadores permitidos.
      *
      * @var string[]
@@ -36,16 +31,14 @@ class InvalidFilterException extends RepositoryException
         'NOT NULL',
     ];
 
-    public function __construct(string $message, array $invalidFilter = [], ?string $operator = null)
+    public function __construct(string $message, protected array $invalidFilter = [], ?string $operator = null)
     {
-        $this->invalidFilter = $invalidFilter;
-
         if ($operator !== null) {
             $message .= " Operador inválido: [{$operator}].";
         }
 
         parent::__construct($message, 400, null, [
-            'filter' => $invalidFilter,
+            'filter' => $this->invalidFilter,
             'allowed_operators' => $this->allowedOperators,
         ]);
     }

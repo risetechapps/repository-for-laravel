@@ -6,24 +6,12 @@ namespace RiseTechApps\Repository\Exception;
 
 class CacheOperationException extends RepositoryException
 {
-    /**
-     * Operação que estava sendo executada.
-     */
-    protected string $operation;
 
-    /**
-     * Tags envolvidas na operação.
-     */
-    protected array $tags;
-
-    public function __construct(string $message, string $operation = '', array $tags = [], ?\Throwable $previous = null)
+    public function __construct(string $message,protected string $operation = '',protected array $tags = [], ?\Throwable $previous = null)
     {
-        $this->operation = $operation;
-        $this->tags = $tags;
-
         parent::__construct($message, 0, $previous, [
-            'operation' => $operation,
-            'tags' => $tags,
+            'operation' => $this->operation,
+            'tags' => $this->tags,
         ]);
     }
 

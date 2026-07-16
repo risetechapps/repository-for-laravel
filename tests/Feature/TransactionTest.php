@@ -20,9 +20,7 @@ it('rolls back the transaction on exception', function () {
 });
 
 it('commits and returns the callback value', function () {
-    $result = $this->repo->transaction(function () {
-        return $this->repo->store(['name' => 'A']);
-    });
+    $result = $this->repo->transaction(fn() => $this->repo->store(['name' => 'A']));
 
     expect($result->name)->toBe('A')
         ->and($this->repo->withoutCache()->count())->toBe(1);

@@ -22,12 +22,10 @@ class RefreshMaterializedViewsJob implements ShouldQueue
      * Evita serialização pesada e garante estado fresh no handle().
      */
     protected string $repositoryClass;
-    protected array $parameters = [];
 
-    public function __construct(BaseRepository $repository, array $parameters = [])
+    public function __construct(BaseRepository $repository, protected array $parameters = [])
     {
-        $this->repositoryClass = get_class($repository);
-        $this->parameters = $parameters;
+        $this->repositoryClass = $repository::class;
 
         // Só dispara após o commit da transação ativa (se houver).
         // Evita refresh de view com base em dados não-commitados/revertidos.

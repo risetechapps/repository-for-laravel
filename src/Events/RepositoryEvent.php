@@ -12,17 +12,9 @@ abstract class RepositoryEvent
 {
     use Dispatchable;
 
-    public BaseRepository $repository;
-    public ?Model $model;
-    public array $data;
-    public string $action;
-
-    public function __construct(BaseRepository $repository, ?Model $model = null, array $data = [], string $action = '')
+    public function __construct(public BaseRepository $repository, public ?Model $model = null, public array $data = [], public string $action = '')
     {
-        $this->repository = $repository;
-        $this->model = $model;
-        $this->data = $data;
-        $this->action = $action;
+
     }
 
     /**

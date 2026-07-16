@@ -36,10 +36,7 @@ class RepositoryServiceProvider extends ServiceProvider
         ]);
 
         if (!Str::hasMacro('qualifyTagCacheResponse')) {
-            Str::macro('qualifyTagCacheResponse', function ($value) {
-
-                return str_replace('\\', '.', $value);
-            });
+            Str::macro('qualifyTagCacheResponse', fn($value) => str_replace('\\', '.', $value));
         }
 
         app('router')->aliasMiddleware('cacheResponse', CacheApiResponse::class);
@@ -48,11 +45,10 @@ class RepositoryServiceProvider extends ServiceProvider
     /**
      * Register the application services.
      */
+    #[\Override]
     public function register(): void
     {
-        $this->app->singleton('repository', function () {
-            return new Repository();
-        });
+        $this->app->singleton('repository', fn() => new Repository());
 
         $this->app->singleton(Repository::class);
 

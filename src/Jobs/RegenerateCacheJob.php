@@ -21,17 +21,10 @@ class RegenerateCacheJob implements ShouldQueue
      * Evita serialização pesada e garante estado fresh no handle().
      */
     protected string $repositoryClass;
-    protected array $method = [];
-    protected array $parameters;
 
-    public function __construct(BaseRepository $repository, array $method, array $parameters = [])
+    public function __construct(BaseRepository $repository, protected array $method, protected array $parameters = [])
     {
-        $this->repositoryClass = get_class($repository);
-        $this->method = $method;
-        $this->parameters = $parameters;
-
-        // Só dispara após o commit da transação ativa (se houver).
-        // Evita regenerar cache com base em dados não-commitados/revertidos.
+        $this->repositoryClass = $repository::class;
         $this->afterCommit = true;
     }
 

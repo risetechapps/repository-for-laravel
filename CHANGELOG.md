@@ -3,7 +3,11 @@
 Todas as alterações notáveis neste projeto serão documentadas neste arquivo.
 O formato é baseado em [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), e este projeto segue o [Versionamento Semântico](https://semver.org/lang/pt-BR/) (SemVer).
 
-## [3.1.0]
+## [3.1.1] 2026-07-15
+### Corrigido
+- Corrigido namespace do import do BaseRepository
+
+## [3.1.0] 2026-07-01
 
 ### Added
 - `withoutEvents()` — silencia todos os eventos do repositório na próxima operação (encadeável, resetado após a operação). Desliga os eventos de escrita (`RepositoryCreating/Created`, `RepositoryUpdating/Updated`, `RepositoryDeleting/Deleted`) e os de limpeza de cache; com os eventos de escrita silenciados, o veto de listeners (`shouldCreate`/`shouldUpdate`/`shouldDelete`) também não se aplica.

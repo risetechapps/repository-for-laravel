@@ -49,8 +49,12 @@ class CacheApiResponse
             $tags = array_merge($tags, $repositoryTags);
         }
 
-        // Cache com tags se suportado, senão cache simples.
-        $store = $supportsTags ? Cache::tags($tags) : Cache::store();
+        // Cache com tags se suportado, senão cache simples — sempre no MESMO
+        // store do repositório (Repository::store()), para que a invalidação do
+        // write (flushEntityCache) atinja estas entradas mesmo quando o store
+        // do repositório difere do default da app.
+        $repositoryStore = Repository::store();
+        $store = $supportsTags ? $repositoryStore->tags($tags) : $repositoryStore;
 
         // Uma única leitura do cache. O valor armazenado é sempre um array;
         // null = miss — dispensa o has()+get() de duas idas ao driver.

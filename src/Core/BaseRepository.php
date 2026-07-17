@@ -644,15 +644,17 @@ abstract class BaseRepository implements RepositoryInterface
      */
     protected function flushEntityCache(): void
     {
-        if (!$this->supportTag) {
-            return;
-        }
-
-        $tag = $this->getEntityClassName();
-        Cache::tags([$tag])->flush();
-
-        $apiResponseTag = str_replace('\\', '.', $tag);
-        Cache::tags([$apiResponseTag, 'api_response'])->flush();
+        // Invalidação ESCOPADA por entidade (core + cacheResponse) via ponto
+        // único em Repository::flushEntity(): flusha as tags da entidade
+        // ($classe e a variante com ponto usada pelo cacheResponse), em um
+        // único flush no store do repositório.
+        //
+        // Deliberadamente NÃO flusha a tag global 'api_response' — um write numa
+        // entidade não derruba o cache HTTP de TODOS os endpoints. Rotas
+        // cacheResponse SEM entityTag só expiram por TTL; purge total manual:
+        // Cache::tags(['api_response'])->flush(). No-op quando o store não
+        // suporta tags.
+        Repository::flushEntity($this->entity());
     }
 
     /**

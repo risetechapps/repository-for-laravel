@@ -700,7 +700,7 @@ abstract class BaseRepository implements RepositoryInterface
         }
 
         try {
-            Cache::tags($tags)->flush();
+            Repository::store()->tags($tags)->flush();
         } catch (\Throwable $e) {
             throw CacheOperationException::flushFailed($tags, $e);
         }

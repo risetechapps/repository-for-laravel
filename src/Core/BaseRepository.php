@@ -485,8 +485,7 @@ abstract class BaseRepository implements RepositoryInterface
 
     protected function supportsTags(): bool
     {
-        $driver = Cache::getDefaultDriver();
-        return !in_array($driver, \RiseTechApps\Repository\Repository::$driverNotSupported);
+        return Repository::storeSupportsTags();
     }
 
     public function rememberCache(callable $call, string $method, array $parameters = [])
@@ -507,15 +506,21 @@ abstract class BaseRepository implements RepositoryInterface
         // A tag da entidade está sempre presente (garante que clearCacheForEntity
         // continue invalidando tudo). As tags de setTags()/withCacheTags() são
         // anexadas como pontos de invalidação adicionais.
-        $store = $this->supportsTags()
-            ? Cache::tags(array_merge([$this->entity()], $this->tags))
-            : Cache::store();
+        $store = $this->supportTag
+            ? Repository::store()->tags(array_merge([$this->getEntityClassName()], $this->tags))
+            : Repository::store();
+
+        // Uma única ida ao cache. A sentinela distingue "miss" de um valor
+        // legitimamente nulo/falso já cacheado (ex.: first() sem registro),
+        // eliminando o has()+get() que fazia duas idas ao driver por leitura.
+        $miss = "\0__repo_cache_miss__\0";
+        $cached = $store->get($cacheKey, $miss);
 
         // Hit → devolve direto do cache
-        if ($store->has($cacheKey)) {
+        if ($cached !== $miss) {
             self::$metrics['total_cache_hits']++;
             $this->trackQueryMetrics($startTime, $method);
-            return $store->get($cacheKey);
+            return $cached;
         }
 
         // Miss → executa a query

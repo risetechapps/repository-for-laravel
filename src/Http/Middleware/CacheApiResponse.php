@@ -50,37 +50,24 @@ class CacheApiResponse
             $tags = array_merge($tags, $repositoryTags);
         }
 
-        // Usar cache com tags se suportado, senão usar cache simples
-        if ($supportsTags) {
-            if (Cache::tags($tags)->has($cacheKey)) {
-                $cachedResponse = Cache::tags($tags)->get($cacheKey);
+        // Cache com tags se suportado, senão cache simples.
+        $store = $supportsTags ? Cache::tags($tags) : Cache::store();
 
-                $response = response($cachedResponse['content'], $cachedResponse['status'] ?? 200);
+        // Uma única leitura do cache. O valor armazenado é sempre um array;
+        // null = miss — dispensa o has()+get() de duas idas ao driver.
+        $cachedResponse = $store->get($cacheKey);
 
-                if (isset($cachedResponse['headers']) && is_array($cachedResponse['headers'])) {
-                    foreach ($cachedResponse['headers'] as $name => $value) {
-                        $response->header($name, $value);
-                    }
+        if (is_array($cachedResponse)) {
+            $response = response($cachedResponse['content'], $cachedResponse['status'] ?? 200);
+
+            if (isset($cachedResponse['headers']) && is_array($cachedResponse['headers'])) {
+                foreach ($cachedResponse['headers'] as $name => $value) {
+                    $response->header($name, $value);
                 }
-                $response->header('X-Cached-By', 'cache-response-api');
-
-                return $response;
             }
-        } else {
-            if (Cache::has($cacheKey)) {
-                $cachedResponse = Cache::get($cacheKey);
+            $response->header('X-Cached-By', 'cache-response-api');
 
-                $response = response($cachedResponse['content'], $cachedResponse['status'] ?? 200);
-
-                if (isset($cachedResponse['headers']) && is_array($cachedResponse['headers'])) {
-                    foreach ($cachedResponse['headers'] as $name => $value) {
-                        $response->header($name, $value);
-                    }
-                }
-                $response->header('X-Cached-By', 'cache-response-api');
-
-                return $response;
-            }
+            return $response;
         }
 
         $response = $next($request);
@@ -89,16 +76,32 @@ class CacheApiResponse
             $dataToCache = [
                 'content' => $response->getContent(),
                 'status' => $response->getStatusCode(),
-                'headers' => $response->headers->all(),
+                'headers' => $this->cacheableHeaders($response),
             ];
 
-            if ($supportsTags) {
-                Cache::tags($tags)->put($cacheKey, $dataToCache, $ttl);
-            } else {
-                Cache::put($cacheKey, $dataToCache, $ttl);
-            }
+            $store->put($cacheKey, $dataToCache, $ttl);
         }
 
         return $response;
+    }
+
+    /**
+     * Filtra os cabeçalhos que podem ser servidos do cache.
+     *
+     * set-cookie carrega a sessão/CSRF do usuário que gerou a resposta —
+     * servi-lo cacheado a outro usuário vazaria a sessão. date/x-request-id
+     * são voláteis e não devem ser congelados no cache.
+     */
+    private function cacheableHeaders(Response $response): array
+    {
+        $headers = $response->headers->all();
+
+        unset(
+            $headers['set-cookie'],
+            $headers['date'],
+            $headers['x-request-id'],
+        );
+
+        return $headers;
     }
 }

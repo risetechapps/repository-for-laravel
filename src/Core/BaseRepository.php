@@ -69,6 +69,24 @@ abstract class BaseRepository implements RepositoryInterface
     protected array $allowedColumns = [];
 
     /**
+     * Colunas liberadas para a busca textual do paginate() (parâmetro
+     * `searchable_fields` do request). Duas funções:
+     *
+     *  - SEGURANÇA: sem whitelist, o cliente escolheria QUALQUER coluna como
+     *    alvo do ILIKE — dá pra oracular dados sensíveis (ex.: hash de senha)
+     *    caractere a caractere e sondar paths JSON arbitrários. A busca só é
+     *    aplicada às colunas declaradas aqui.
+     *  - PERFORMANCE: são exatamente as colunas que devem ter índice GIN
+     *    pg_trgm (ver RepositorySearchIndexesCommand) para o ILIKE '%x%' não
+     *    varrer a tabela inteira.
+     *
+     * Aceita coluna simples ('nome') ou path JSON ('dados.cpf' → dados->>'cpf').
+     * Vazio → cai no fallback de searchableWhitelist() (allowedColumns ou
+     * colunas reais da tabela), mantendo compatibilidade.
+     */
+    protected array $searchableColumns = [];
+
+    /**
      * Operadores permitidos em findWhereCustom.
      * Subclasses podem sobrescrever para adicionar/remover operadores.
      */

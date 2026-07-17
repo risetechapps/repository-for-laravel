@@ -31,6 +31,65 @@ class Repository
         return self::$tagsCache;
     }
 
+    /**
+     * Nome do store de cache do repositório (config repository.cache.store).
+     * null = store default da aplicação.
+     */
+    public static function cacheStoreName(): ?string
+    {
+        return config('repository.cache.store');
+    }
+
+    /**
+     * Store de cache usado pelo core e pelo middleware cacheResponse.
+     * Fonte única — garante que leitura, escrita e invalidação usem o MESMO
+     * store, mesmo quando o default da app é diferente (Furo 2).
+     */
+    public static function store(): CacheRepository
+    {
+        return Cache::store(static::cacheStoreName());
+    }
+
+    /**
+     * Indica se o store do repositório suporta tags. Resolve o driver do store
+     * configurado (não o default da app) e checa contra a lista de drivers sem
+     * suporte a tags (config repository.cache.unsupported_tag_drivers).
+     */
+    public static function storeSupportsTags(): bool
+    {
+        $name = static::cacheStoreName() ?? config('cache.default');
+        $driver = config("cache.stores.{$name}.driver", $name);
+
+        $unsupported = config('repository.cache.unsupported_tag_drivers', self::$driverNotSupported);
+
+        return !in_array($driver, $unsupported, true);
+    }
+
+    /**
+     * Invalidação LEVE do cache de uma entidade (core + cacheResponse), sem os
+     * jobs de warming/refresh do BaseRepository::clearCacheForEntity().
+     *
+     * É o ponto usado pela trait InvalidatesRepositoryCache (Furo 3): qualquer
+     * escrita Eloquent do model — passando ou não pelo repositório — invalida o
+     * cache. Também pode ser chamado manualmente após uma escrita crua
+     * (DB::table()->update(), bulk update) que não dispara eventos Eloquent.
+     *
+     *   Repository::flushEntity(\App\Models\Client::class);
+     *
+     * No-op quando o store não suporta tags.
+     */
+    public static function flushEntity(string $modelClass): void
+    {
+        if (!static::storeSupportsTags()) {
+            return;
+        }
+
+        $tag = ltrim($modelClass, '\\');
+        $apiResponseTag = str_replace('\\', '.', $tag);
+
+        static::store()->tags([$tag, $apiResponseTag])->flush();
+    }
+
     public static function getBindingsRepository(): array
     {
         $allBindings = app()->getBindings();

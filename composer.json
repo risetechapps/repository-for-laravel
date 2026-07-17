@@ -21,8 +21,8 @@
         "php": "^8.3",
         "illuminate/support": "^12",
         "risetechapps/has-uuid-for-laravel": "^1.2.0",
-        "risetechapps/to-upper-for-laravel": "^1.1.0",
-        "tpetry/laravel-postgresql-enhanced": "^3.5.0",
+        "risetechapps/to-upper-for-laravel": "^1.2.0",
+        "tpetry/laravel-postgresql-enhanced": "^3.7.0",
         "predis/predis": "^v3.3.0"
     },
     "require-dev": {

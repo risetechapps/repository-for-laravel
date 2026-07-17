@@ -41,8 +41,12 @@ class CacheApiResponse
         $tags = ['api_response'];
         $repositoryTags = \RiseTechApps\Repository\Repository::getTagsCache();
 
+        // Normaliza a tag da entidade para notação com ponto — é assim que o
+        // repositório a limpa (flushEntityCache: str_replace('\\','.', classe)).
+        // Aceita tanto 'App\Models\Client' quanto 'App.Models.Client' na rota,
+        // e ambos casam com o flush do write.
         if ($entityTag) {
-            $tags[] = $entityTag;
+            $tags[] = str_replace('\\', '.', $entityTag);
         }
 
         if (!empty($repositoryTags)) {

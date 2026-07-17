@@ -2,9 +2,8 @@
 
 namespace RiseTechApps\Repository;
 
-use Illuminate\Container\Container;
-use RiseTechApps\Repository\Contracts\RepositoryInterface;
-use RiseTechApps\Repository\Core\BaseRepository;
+use Illuminate\Contracts\Cache\Repository as CacheRepository;
+use Illuminate\Support\Facades\Cache;
 
 class Repository
 {

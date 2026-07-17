@@ -14,8 +14,7 @@ class CacheApiResponse
      */
     private function supportsTags(): bool
     {
-        $driver = Cache::getDefaultDriver();
-        return !in_array($driver, \RiseTechApps\Repository\Repository::$driverNotSupported);
+        return Repository::storeSupportsTags();
     }
 
     /**

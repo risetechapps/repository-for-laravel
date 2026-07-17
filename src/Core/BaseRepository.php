@@ -1109,7 +1109,7 @@ abstract class BaseRepository implements RepositoryInterface
         $request = request();
         $perPage = $request->get('pagesize', $totalPage);
         $search = $request->get('search');
-        $searchableFields = $request->get('searchable_fields', []);
+        $searchableFields = $this->resolveSearchableFields((array) $request->get('searchable_fields', []));
 
         $query = $this->newQuery();
 
@@ -1216,6 +1216,86 @@ abstract class BaseRepository implements RepositoryInterface
         }
 
         return in_array($column, $this->allowedSortColumns) ? $resolved : 'id';
+    }
+
+    /**
+     * Filtra os campos de busca do request contra a whitelist do repositório.
+     *
+     * Descarta qualquer campo não declarado — impede que o cliente aponte o
+     * ILIKE para colunas arbitrárias/sensíveis (oráculo de dados) e garante que
+     * a busca só use colunas que têm índice GIN pg_trgm. Para paths JSON
+     * ('dados.cpf') a coluna base ('dados') é o que precisa estar na whitelist.
+     */
+    protected function resolveSearchableFields(array $requested): array
+    {
+        if (empty($requested)) {
+            return [];
+        }
+
+        $whitelist = $this->searchableWhitelist();
+
+        // Nenhuma whitelist e nenhuma coluna detectável: mantém o comportamento
+        // anterior (sem filtro) para não quebrar apps existentes — mas declare
+        // $searchableColumns para fechar a superfície e habilitar os índices.
+        if (empty($whitelist)) {
+            return array_values($requested);
+        }
+
+        $whitelist = array_map('strval', $whitelist);
+
+        return array_values(array_filter($requested, function ($field) use ($whitelist) {
+            $base = explode('.', (string) $field, 2)[0];
+            return in_array($base, $whitelist, true);
+        }));
+    }
+
+    /**
+     * Conjunto de colunas aceitas na busca textual, em ordem de preferência:
+     * $searchableColumns → $allowedColumns → colunas reais da tabela.
+     */
+    protected function searchableWhitelist(): array
+    {
+        if (!empty($this->searchableColumns)) {
+            return $this->searchableColumns;
+        }
+
+        if (!empty($this->allowedColumns)) {
+            return $this->allowedColumns;
+        }
+
+        try {
+            return Schema::connection($this->connection()->getName())
+                ->getColumnListing($this->getTable());
+        } catch (\Throwable) {
+            return [];
+        }
+    }
+
+    /**
+     * Colunas de busca DECLARADAS explicitamente ($searchableColumns).
+     * Usado pelo RepositorySearchIndexesCommand para saber onde criar os
+     * índices GIN pg_trgm — só cria para intenção explícita, nunca para toda
+     * coluna da tabela.
+     */
+    public function declaredSearchableColumns(): array
+    {
+        return $this->searchableColumns;
+    }
+
+    /**
+     * Nome da tabela do model da entidade.
+     */
+    public function getTable(): string
+    {
+        return app($this->entityClass)->getTable();
+    }
+
+    /**
+     * Nome da conexão do model da entidade (respeita $connection do model).
+     */
+    public function getConnectionName(): string
+    {
+        return $this->connection()->getName();
     }
 
     /**

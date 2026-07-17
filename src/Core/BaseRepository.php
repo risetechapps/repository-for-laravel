@@ -1158,7 +1158,7 @@ abstract class BaseRepository implements RepositoryInterface
         return $this->rememberCache(function () use ($totalPage, $request) {
             $perPage = $request->get('pagesize', $totalPage);
             $search = $request->get('search');
-            $searchableFields = $request->get('searchable_fields', []);
+            $searchableFields = $this->resolveSearchableFields((array) $request->get('searchable_fields', []));
 
             // Se já temos um builder em andamento (de where(), orderBy(), etc), usa ele
             // — aplicando o escopo de soft-delete/limit uma única vez, como nos demais terminais.

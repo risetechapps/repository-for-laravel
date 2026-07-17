@@ -2084,7 +2084,7 @@ abstract class BaseRepository implements RepositoryInterface
     {
         $table = app($this->entityClass)->getTable();
 
-        return Cache::remember(
+        return Repository::store()->remember(
             "repo:columns:{$table}",
             now()->addHours(24),
             fn() => Schema::getColumnListing($table)

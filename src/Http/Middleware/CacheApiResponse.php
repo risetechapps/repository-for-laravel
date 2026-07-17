@@ -4,13 +4,13 @@ namespace RiseTechApps\Repository\Http\Middleware;
 
 use Closure;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Cache;
+use RiseTechApps\Repository\Repository;
 use Symfony\Component\HttpFoundation\Response;
 
 class CacheApiResponse
 {
     /**
-     * Verifica se o driver de cache atual suporta tags.
+     * Verifica se o store do repositório suporta tags.
      */
     private function supportsTags(): bool
     {

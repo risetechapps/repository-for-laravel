@@ -23,6 +23,12 @@ O **Laravel Repository** é um package para Laravel que abstrai a camada de dado
 
 ---
 
+## 📋 Novidades (v3.2.0)
+
+> 🔒 **Segurança + performance da busca:** `searchable_fields` do `paginate()` agora é filtrado por uma whitelist (`$searchableColumns`) — o cliente não consegue mais apontar o `ILIKE` para colunas arbitrárias/sensíveis. Novo comando `repository:search-indexes` cria índices **GIN pg_trgm** para deixar o `ILIKE '%x%'` usar índice. `CacheApiResponse` deixou de cachear `Set-Cookie` (não vaza mais sessão entre usuários) e agora invalida **por entidade** (um write não derruba mais todo o cache HTTP). Leituras cacheadas fazem uma única ida ao cache. Ver [Segurança](#-segurança), [Índices de busca](#índices-de-busca-gin-pg_trgm) e [Cache de resposta](#cache-de-resposta-http-cacheresponse).
+>
+> Detalhes e nota de compatibilidade (busca em JSON) no [CHANGELOG](CHANGELOG.md#320---2026-07-17).
+
 ## 📋 Novidades (v3.0.0)
 
 > ⚠️ **Breaking change:** o isolamento automático de views por `SharingPolicy` foi **removido** do package. O package agora é agnóstico de tenancy — o isolamento de views passa a ser feito sobrescrevendo o hook `applyViewScope()` (ver seção [Isolamento nas Views](#-isolamento-nas-views-multi-tenancy-etc)).
@@ -61,7 +67,8 @@ O **Laravel Repository** é um package para Laravel que abstrai a camada de dado
 
 - PHP >= 8.3
 - Laravel >= 12
-- PostgreSQL (para uso de Materialized Views)
+- PostgreSQL (para uso de Materialized Views; extensão `pg_trgm` para os índices de busca — ver [Índices de busca](#índices-de-busca-gin-pg_trgm))
+- Store de cache **taggable** (`redis`/`memcached`) para a invalidação por tag do core e do `cacheResponse`; em `file`/`database` o cache só expira por TTL — ver [Store de cache](#store-de-cache-e-invalidação-garantida)
 - Composer instalado
 
 ### 1. Instalar o package
@@ -692,9 +699,11 @@ Paginação dinâmica baseada em parâmetros do request. Protegida contra SQL In
 |--------------------|--------------------------------------------------|
 | `pagesize`         | Registros por página (padrão: `$totalPage`)      |
 | `search`           | Texto para busca (`ILIKE`)                       |
-| `searchable_fields`| Array de colunas onde a busca é aplicada         |
+| `searchable_fields`| Array de colunas onde a busca é aplicada (filtrado contra a whitelist — ver abaixo) |
 | `sort_column`      | Coluna de ordenação (validada contra whitelist)  |
 | `sort_direction`   | `asc` ou `desc` (padrão: `asc`)                  |
+
+> **Segurança + performance da busca:** os campos de `searchable_fields` são filtrados por `$searchableColumns` → `$allowedColumns` → colunas reais da tabela. Campos não declarados são **descartados** — o cliente não consegue apontar o `ILIKE` para colunas arbitrárias/sensíveis. Declare `$searchableColumns` para liberar (e indexar) as colunas de busca, inclusive paths JSON (`'dados.cpf'`). Ver [Segurança](#-segurança) e [Índices de busca](#índices-de-busca-gin-pg_trgm).
 
 ```php
 // No Controller
@@ -1087,6 +1096,58 @@ Após uma escrita, o `RegenerateCacheJob` re-aquece o cache recém-limpo. Contro
 ],
 ```
 
+#### Cache de resposta HTTP (`cacheResponse`)
+Middleware que cacheia a resposta inteira de rotas **GET** — evita reprocessar controller + repositório em endpoints de leitura. Registrado automaticamente pelo package com o alias `cacheResponse`.
+
+```php
+use Illuminate\Support\Facades\Route;
+
+// TTL padrão (3600s), sem tag de entidade
+Route::get('/clients', [ClientController::class, 'index'])
+    ->middleware('cacheResponse');
+
+// TTL de 600s
+Route::get('/clients', [ClientController::class, 'index'])
+    ->middleware('cacheResponse:600');
+
+// TTL + tag da entidade → invalida junto com o cache do repositório.
+// RECOMENDADO: concatene ::class — imune a typo no FQCN.
+Route::get('/clients', [ClientController::class, 'index'])
+    ->middleware('cacheResponse:600,'.\App\Models\Client::class);
+
+// Só a tag da entidade (TTL cai no padrão 3600s)
+Route::get('/clients', [ClientController::class, 'index'])
+    ->middleware('cacheResponse:'.\App\Models\Client::class);
+```
+
+**Parâmetros:** `cacheResponse:{ttl?},{entityTag?}`. Se o primeiro argumento não for um inteiro positivo, é tratado como `entityTag` e o TTL cai no padrão (3600s).
+
+**Invalidação por entidade (escopada):** o `entityTag` amarra a resposta cacheada ao cache da entidade no repositório. Em toda escrita (`store`/`update`/`delete`), o `flushEntityCache()` limpa **apenas** as respostas marcadas com a tag daquela entidade — um write em `Client` **não** derruba o cache de `Product`, `Order`, etc.
+
+- A tag deve casar **exatamente** com o FQCN do model que o repositório usa como entidade (a variante com ponto). O middleware aceita as duas notações — `App\Models\Client` **ou** `App.Models.Client` (normaliza `\`→`.`) — mas a correspondência é por igualdade exata.
+- **Sempre concatene `::class`** em vez de digitar a tag na mão. Digitar o FQCN dotted é o erro nº 1: é fácil errar um segmento (ex.: um model `App\Models\Domain\Domain` — namespace `...\Domain` + classe `Domain` — vira `App.Models.Domain.Domain`, com `Domain` repetido; digitar `App.Models.Domain` não invalida nada e falha em silêncio, só por TTL).
+- **Sem `entityTag`, a rota só expira por TTL** — nenhum write a invalida. Declare o `entityTag` sempre que quiser invalidação imediata na escrita.
+
+```php
+// ✅ Invalida quando ClientRepository escreve — ::class evita typo no FQCN
+->middleware('cacheResponse:600,'.\App\Models\Client::class);
+
+// ⚠️ Só TTL — nenhum write derruba esta entrada
+->middleware('cacheResponse:600');
+```
+
+> **Testando a invalidação:** cacheie um endpoint que retorne `now()`, faça **dois GET seguidos** (o `time` tem que vir **igual** — prova que cacheou), dispare a escrita/`clearCacheForEntity()`, e um 3º GET tem que trazer `time` **novo**. Se o 2º GET já vier diferente, a rota não está cacheando. Ao trocar a rota/tag entre testes, rode `php artisan optimize:clear` (e resete o opcache) para não medir código/cache antigo.
+
+> **Purge total** (raro — ex.: deploy/limpeza geral): todas as respostas carregam a tag base `api_response`, então `Cache::tags(['api_response'])->flush()` zera o cache HTTP inteiro de uma vez.
+
+**Rota que lê várias entidades:** o middleware aceita só um `entityTag`. Para uma listagem que junta, p.ex., `Client` + `Address`, escute os eventos de escrita da outra entidade (`RepositoryUpdated` de `Address`) e chame `flushTags(['App.Models.Client'])`, ou reduza o TTL.
+
+**Observações:**
+- Só cacheia `GET` com resposta `2xx`.
+- Chave por URL completa (`fullUrl`), incluindo query string — `?page=2` e `?page=3` são entradas distintas.
+- Cabeçalhos voláteis/sensíveis (`Set-Cookie`, `date`, `x-request-id`) **não** são cacheados. Respostas do cache trazem `X-Cached-By: cache-response-api`.
+- Sem store com suporte a tags (ex.: `file`, `database`), cai em cache simples — **nenhuma** invalidação por tag funciona (nem core, nem resposta); só TTL. Aponte `repository.cache.store` para um store `redis` (ver [Store de cache e invalidação](#store-de-cache-e-invalidação-garantida)).
+
 ---
 
 ### 🛡️ Segurança
@@ -1114,6 +1175,99 @@ class ClientEloquentRepository extends BaseRepository implements ClientRepositor
 
 #### Ordenação no `paginate()`
 `sort_column` é validado contra `$allowedSortColumns` (fallback seguro `id`).
+
+#### Busca textual no `paginate()`
+`searchable_fields` chega do request e é usado como **nome de coluna** no `ILIKE`. Sem restrição, o cliente poderia apontar a busca para qualquer coluna — inclusive sensível (ex.: hash de senha) — e oraculá-la caractere a caractere, ou sondar paths JSON arbitrários. Por isso os campos são filtrados por `resolveSearchableFields()` contra uma whitelist, em ordem de preferência:
+
+1. `$searchableColumns` (recomendado — declara a intenção e habilita os índices de busca);
+2. `$allowedColumns`;
+3. colunas reais da tabela (`Schema::getColumnListing`).
+
+Campos fora da whitelist são silenciosamente descartados. Aplica-se a `paginate()` e `paginateWithView()`.
+
+```php
+class ClientEloquentRepository extends BaseRepository implements ClientRepository
+{
+    // Colunas liberadas para a busca textual do paginate().
+    // Coluna simples ou path JSON ('dados.cpf' → dados->>'cpf').
+    protected array $searchableColumns = ['nome', 'email', 'documento', 'dados.cpf'];
+}
+```
+
+> ⚠️ **Busca em JSON:** paths como `dados->>'cpf'` não são colunas reais da tabela, então só passam pela whitelist se a coluna base (`dados`) estiver em `$searchableColumns` ou `$allowedColumns`. Repositórios que buscavam em JSON precisam declará-la, senão esses campos deixam de ser buscados.
+
+---
+
+### Índices de busca (GIN pg_trgm)
+
+A busca do `paginate()` usa `ILIKE '%texto%'`. Com o wildcard à esquerda, o PostgreSQL **não usa índice B-tree** e varre a tabela inteira. A solução é um índice **GIN com `pg_trgm`**: com ele no lugar, o mesmo `ILIKE '%x%'` passa a usar índice — **a query não muda, só fica rápida**.
+
+O comando cria esses índices a partir das colunas declaradas em `$searchableColumns` de cada repositório:
+
+```bash
+# Dry-run: mostra o SQL sem executar (todos os repositórios de config('repository.repositories'))
+php artisan repository:search-indexes
+
+# Executa. Em produção use --concurrently para não travar a escrita na tabela durante a criação
+php artisan repository:search-indexes --apply --concurrently
+
+# Apenas um repositório
+php artisan repository:search-indexes ClientEloquentRepository --apply --concurrently
+```
+
+Comportamento:
+
+- Garante `CREATE EXTENSION IF NOT EXISTS pg_trgm` uma vez por conexão (precisa de privilégio no banco — rode uma vez como superuser se o usuário da app não tiver).
+- Cria um `CREATE INDEX ... USING gin (col gin_trgm_ops)` por coluna. Path JSON `'dados.cpf'` vira índice de expressão `USING gin ((dados->>'cpf') gin_trgm_ops)`.
+- Índices com nome determinístico e `IF NOT EXISTS` — idempotente, pode rodar de novo com segurança.
+- Ignora repositórios sem `$searchableColumns` e conexões que não sejam PostgreSQL.
+
+> Só cria índice para colunas **declaradas explicitamente** em `$searchableColumns` — nunca para toda coluna da tabela.
+
+---
+
+### Store de cache e invalidação garantida
+
+A invalidação por tag (core **e** `cacheResponse`) só funciona em stores taggable (`redis`, `memcached`). Em `file`/`database` o flush vira no-op e o cache só expira por TTL.
+
+**Store dedicado** — para não depender do driver default da app, aponte um store taggable só para o repositório:
+
+```php
+// config/repository.php
+'cache' => [
+    'store' => env('REPOSITORY_CACHE_STORE', null), // null = store default da app
+],
+```
+
+```dotenv
+REPOSITORY_CACHE_STORE=redis
+```
+
+Leitura, escrita e invalidação (core e `cacheResponse`) passam a usar esse store, mesmo que o `cache.default` da app seja `file`. O ServiceProvider emite um **warning no boot** se o store resolvido não suportar tags.
+
+#### Invalidação em escritas fora do repositório
+
+O `clearCacheForEntity()` só dispara nos métodos de escrita do **repositório**. Uma escrita direta no model (`$client->update()`, `Client::create()`), fora do repositório, deixaria o cache stale. Para fechar isso, use a trait no model:
+
+```php
+use RiseTechApps\Repository\Traits\InvalidatesRepositoryCache;
+
+class Client extends Model
+{
+    use InvalidatesRepositoryCache;
+}
+```
+
+Ela engancha os eventos Eloquent (`saved`/`deleted`/`restored`/`forceDeleted`) e invalida o cache da entidade (core + `cacheResponse`) em **qualquer** escrita Eloquent — passe ou não pelo repositório. A invalidação é **leve** (só o flush das tags), sem os jobs de warming — um loop salvando muitos models não gera enxurrada de jobs.
+
+**Não coberto:** escritas que pulam os eventos Eloquent — `DB::table()->update()` e bulk `Model::where()->update()`/`->delete()`. Nesses casos, invalide manualmente:
+
+```php
+use RiseTechApps\Repository\Repository;
+
+DB::table('clients')->where(...)->update([...]);
+Repository::flushEntity(\App\Models\Client::class);
+```
 
 ---
 

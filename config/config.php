@@ -48,6 +48,18 @@ return [
         'default_ttl' => null,
 
         /*
+        | Store de cache usado pelo repositório (core) e pelo middleware
+        | cacheResponse. null = usa o store default da aplicação (cache.default).
+        |
+        | A invalidação por tag — tanto do cache do core quanto do cacheResponse —
+        | EXIGE um store taggable (redis, memcached). Se o default da app for
+        | file/database, aponte aqui para um store redis; senão a invalidação vira
+        | no-op e o cache só expira por TTL (Furo 2). O ServiceProvider emite um
+        | warning no boot quando o store resolvido não suporta tags.
+        */
+        'store' => env('REPOSITORY_CACHE_STORE', null),
+
+        /*
         | Drivers que não suportam tags
         */
         'unsupported_tag_drivers' => ['file', 'database', 'array'],

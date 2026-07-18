@@ -23,7 +23,7 @@ O **Laravel Repository** é um package para Laravel que abstrai a camada de dado
 
 ---
 
-## 📋 Novidades (v3.2.0)
+## 📋 Novidades (v4.0.0)
 
 > 🔒 **Segurança + performance da busca:** `searchable_fields` do `paginate()` agora é filtrado por uma whitelist (`$searchableColumns`) — o cliente não consegue mais apontar o `ILIKE` para colunas arbitrárias/sensíveis. Novo comando `repository:search-indexes` cria índices **GIN pg_trgm** para deixar o `ILIKE '%x%'` usar índice. `CacheApiResponse` deixou de cachear `Set-Cookie` (não vaza mais sessão entre usuários) e agora invalida **por entidade** (um write não derruba mais todo o cache HTTP). Leituras cacheadas fazem uma única ida ao cache. Ver [Segurança](#-segurança), [Índices de busca](#índices-de-busca-gin-pg_trgm) e [Cache de resposta](#cache-de-resposta-http-cacheresponse).
 >

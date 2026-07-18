@@ -18,12 +18,12 @@
         }
     ],
     "require": {
-        "php": "^8.3",
+        "php": "^8.4",
         "illuminate/support": "^12",
         "risetechapps/has-uuid-for-laravel": "^1.2.0",
         "risetechapps/to-upper-for-laravel": "^1.2.0",
         "tpetry/laravel-postgresql-enhanced": "^3.7.0",
-        "predis/predis": "^v3.3.0"
+        "predis/predis": "^v3.5.1"
     },
     "require-dev": {
         "fakerphp/faker": "^1.23",
@@ -68,5 +68,5 @@
     },
     "minimum-stability": "stable",
     "prefer-stable": true,
-    "version": "3.1.0"
+    "version": "4.0.0"
 }

@@ -3,6 +3,32 @@
 Todas as alterações notáveis neste projeto serão documentadas neste arquivo.
 O formato é baseado em [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), e este projeto segue o [Versionamento Semântico](https://semver.org/lang/pt-BR/) (SemVer).
 
+## [3.2.0] - 2026-07-17
+
+### Security
+- **Busca textual do `paginate()` restrita a uma whitelist**: `searchable_fields` do request era usado diretamente como nome de coluna no `ILIKE`, permitindo ao cliente apontar a busca para qualquer coluna (oráculo de dados sensíveis, ex.: hash de senha, caractere a caractere) e sondar paths JSON arbitrários. Agora os campos são filtrados por `resolveSearchableFields()` contra `$searchableColumns` → `$allowedColumns` → colunas reais da tabela. Campos não declarados são descartados. Aplica-se a `paginate()` e `paginateWithView()`.
+- **`CacheApiResponse` não cacheia mais cabeçalhos voláteis/sensíveis**: `Set-Cookie` (sessão/CSRF), `date` e `x-request-id` eram gravados no cache e reenviados a outros usuários — vazamento de sessão entre usuários numa resposta GET cacheada. Novo `cacheableHeaders()` remove esses cabeçalhos antes de armazenar.
+
+### Added
+- Nova property `$searchableColumns` no `BaseRepository`: declara as colunas liberadas para a busca textual do `paginate()` (coluna simples `'nome'` ou path JSON `'dados.cpf'`). Também é a fonte usada para criar os índices de busca.
+- Comando `repository:search-indexes {repository?} {--apply} {--concurrently}`: cria índices **GIN `pg_trgm`** para as colunas de `$searchableColumns`, fazendo o `ILIKE '%x%'` do `paginate()` usar índice em vez de varrer a tabela. Sem `--apply` é dry-run (mostra o SQL); `--concurrently` cria sem lock de escrita (recomendado em produção). Garante `CREATE EXTENSION IF NOT EXISTS pg_trgm` uma vez por conexão e ignora conexões não-PostgreSQL.
+- Métodos públicos de introspecção no `BaseRepository`: `declaredSearchableColumns()`, `getTable()`, `getConnectionName()`.
+- **Store de cache dedicado** (Furo 2): nova config `repository.cache.store` (`REPOSITORY_CACHE_STORE`). O core e o `cacheResponse` passam a usar esse store para leitura, escrita e invalidação — independente do `cache.default` da app. Novos helpers estáticos `Repository::store()`, `Repository::storeSupportsTags()`, `Repository::cacheStoreName()`. O ServiceProvider emite warning no boot quando o store resolvido não suporta tags.
+- **Trait `InvalidatesRepositoryCache`** (Furo 3): engancha os eventos Eloquent do model (`saved`/`deleted`/`restored`/`forceDeleted`) e invalida o cache da entidade (core + `cacheResponse`) em qualquer escrita Eloquent — passando ou não pelo repositório. Invalidação leve (só flush de tags, sem jobs de warming). Novo `Repository::flushEntity(string $modelClass)` para invalidação manual após escritas cruas (`DB::`, bulk update) que não disparam eventos Eloquent.
+
+### Performance
+- `rememberCache()` faz **uma única ida ao cache** (`get()` com sentinela) em vez de `has()` + `get()`, preservando o cache de valores nulos (ex.: `first()` sem registro). Passa a reusar a flag `$this->supportTag` (calculada no construtor) em vez de recomputar `supportsTags()` — que consultava o driver de cache — a cada leitura.
+- `flushEntityCache()` invalida as tags da entidade (`entidade` + tag de api-response) em **um único `flush()`** em vez de dois, reduzindo idas ao driver por escrita.
+
+### Changed
+- **Invalidação do `cacheResponse` agora é escopada por entidade.** Antes, toda escrita flushava a tag global `api_response`, derrubando o cache HTTP de **todos** os endpoints a cada write (cache de resposta praticamente inútil sob carga de escrita). Agora `flushEntityCache()` limpa apenas as respostas marcadas com a tag da própria entidade — um write em `Client` não afeta o cache de `Product`/`Order`. Purge total continua possível manualmente via `Cache::tags(['api_response'])->flush()`.
+- O middleware `cacheResponse` normaliza o `entityTag`: aceita `App\Models\Client` **ou** `App.Models.Client` (ambos casam com o flush do repositório).
+- Cache do core, `cacheResponse` e `flushTags()` roteados pelo store dedicado (`Repository::store()`) em vez do `Cache` default — garante que leitura, escrita e invalidação usem o mesmo store. `supportsTags()` passa a resolver o driver do store configurado (via `repository.cache.unsupported_tag_drivers`), não mais o `Cache::getDefaultDriver()`.
+
+### ⚠️ Compatibilidade
+- **Rotas `cacheResponse` sem `entityTag` deixam de ser invalidadas por escrita** — passam a expirar só por TTL. Para manter invalidação imediata no write, declare o `entityTag` na rota: `cacheResponse:600,App\Models\Client`. (Antes o flush global `api_response` invalidava qualquer rota, ao custo de derrubar todo o cache HTTP a cada write.)
+- Repositórios que buscam em **paths JSON** (`dados->>'cpf'`) precisam declarar a coluna base em `$searchableColumns` (ou `$allowedColumns`) — caso contrário esses campos são descartados da busca, pois não são colunas reais da tabela. Colunas simples já cobertas por `$allowedColumns`/pela tabela continuam funcionando sem mudança.
+
 ## [3.1.0]
 
 ### Added

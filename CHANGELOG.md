@@ -3,6 +3,12 @@
 Todas as alterações notáveis neste projeto serão documentadas neste arquivo.
 O formato é baseado em [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), e este projeto segue o [Versionamento Semântico](https://semver.org/lang/pt-BR/) (SemVer).
 
+## [4.0.1] - 2026-07-19
+
+### Performance
+- **Introspecção de schema cacheada no fallback da busca**: `searchableWhitelist()` (usado pelo `paginate()` com `searchable_fields`) caía em `Schema::getColumnListing()` **sem cache** quando o repositório não declarava `$searchableColumns`/`$allowedColumns` — ~38ms por request de listagem paginada (consulta ao `pg_catalog`). Agora usa `tableColumns()`, que cacheia a introspecção por 24h. 1ª request paga; as demais são cache-hit.
+- **`tableColumns()` agora é connection-aware**: usa `Schema::connection($this->getConnectionName())` e inclui a conexão na chave do cache. Antes usava a conexão default — o que falharia para models centrais (ex.: `tenants`) que vivem numa conexão diferente do default swapped por tenant. Também corrige `guardColumn`/`fuzzySearch`/`searchFullText`/`findWhereJson`, que validam colunas via `tableColumns()`.
+
 ## [3.2.0] - 2026-07-17
 
 ### Security

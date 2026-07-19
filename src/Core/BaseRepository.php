@@ -1263,9 +1263,11 @@ abstract class BaseRepository implements RepositoryInterface
             return $this->allowedColumns;
         }
 
+        // Fallback: colunas reais da tabela, via tableColumns() — que CACHEIA a
+        // introspecção de schema (era ~38ms por request de paginate com busca,
+        // pois getColumnListing consultava o pg_catalog sem cache).
         try {
-            return Schema::connection($this->connection()->getName())
-                ->getColumnListing($this->getTable());
+            return $this->tableColumns();
         } catch (\Throwable) {
             return [];
         }
@@ -2082,12 +2084,17 @@ abstract class BaseRepository implements RepositoryInterface
      */
     protected function tableColumns(): array
     {
-        $table = app($this->entityClass)->getTable();
+        $table = $this->getTable();
+        $connection = $this->getConnectionName();
 
+        // Introspecção de schema (getColumnListing) é cara no PostgreSQL (~30-40ms,
+        // consulta o pg_catalog) — por isso é cacheada 24h. A conexão vai na chave
+        // e no getColumnListing: models centrais (ex.: tenants) vivem numa conexão
+        // diferente do default swapped por tenant, e usar o default falharia.
         return Repository::store()->remember(
-            "repo:columns:{$table}",
+            "repo:columns:{$connection}:{$table}",
             now()->addHours(24),
-            fn() => Schema::getColumnListing($table)
+            fn() => Schema::connection($connection)->getColumnListing($table)
         );
     }
 

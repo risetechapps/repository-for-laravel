@@ -349,7 +349,7 @@ $byMonth = $orderRepository
 ---
 
 #### `count()`
-Retorna o total de registros no escopo atual, sem carregar dados.
+Retorna o total de registros no escopo atual, sem carregar dados. Resultado é cacheado (TTL padrão do repositório).
 
 ```php
 $total = $clientRepository->count();
@@ -364,7 +364,7 @@ $totalGeral = $clientRepository->useTrashed(true)->count();
 ---
 
 #### `exists()`
-Verifica se existe ao menos um registro no escopo atual.
+Verifica se existe ao menos um registro no escopo atual. Resultado é cacheado (TTL padrão do repositório).
 
 ```php
 if ($clientRepository->exists()) {
@@ -455,8 +455,8 @@ $recentes = $clientRepository->orderBy('created_at', 'DESC');
 
 ---
 
-#### `dataTable()`
-Retorna todos os registros para uso em tabelas (com cache).
+#### `dataTable(?int $limit = 5000)`
+Retorna registros para uso em tabelas (com cache). Por padrão limita em 5000 registros para evitar OOM. Passe `null` para remover o limite.
 
 ```php
 $dados = $clientRepository->dataTable();
@@ -1103,7 +1103,7 @@ Após uma escrita, o `RegenerateCacheJob` re-aquece o cache recém-limpo. Contro
 // config/repository.php
 'cache' => [
     'warming_enabled' => true,            // false = rebuild lazy no próximo read
-    'warming_methods' => ['get', 'first'], // aceita: get, first, dataTable
+    'warming_methods' => ['get', 'first'], // aceita: get, first, dataTable (findById não é mais aquecido)
 ],
 ```
 
@@ -1131,7 +1131,7 @@ Route::get('/clients', [ClientController::class, 'index'])
     ->middleware('cacheResponse:'.\App\Models\Client::class);
 ```
 
-**Parâmetros:** `cacheResponse:{ttl?},{entityTag?}`. Se o primeiro argumento não for um inteiro positivo, é tratado como `entityTag` e o TTL cai no padrão (3600s).
+**Parâmetros:** `cacheResponse:{ttl?},{entityTag?},{scope?}`. Se o primeiro argumento não for um inteiro positivo, é tratado como `entityTag` e o TTL cai no padrão (3600s). O terceiro parâmetro `auth` inclui o `user_id` na chave de cache — use em rotas de dados do usuário logado (`/api/me`) para evitar que um usuário receba dados de outro.
 
 **Invalidação por entidade (escopada):** o `entityTag` amarra a resposta cacheada ao cache da entidade no repositório. Em toda escrita (`store`/`update`/`delete`), o `flushEntityCache()` limpa **apenas** as respostas marcadas com a tag daquela entidade — um write em `Client` **não** derruba o cache de `Product`, `Order`, etc.
 
@@ -1142,6 +1142,10 @@ Route::get('/clients', [ClientController::class, 'index'])
 ```php
 // ✅ Invalida quando ClientRepository escreve — ::class evita typo no FQCN
 ->middleware('cacheResponse:600,'.\App\Models\Client::class);
+
+// ✅ Com escopo por usuário (dados sensíveis do usuário logado)
+Route::get('/me', [ProfileController::class, 'show'])
+    ->middleware('cacheResponse:600,'.\App\Models\User::class.',auth');
 
 // ⚠️ Só TTL — nenhum write derruba esta entrada
 ->middleware('cacheResponse:600');
@@ -1156,7 +1160,7 @@ Route::get('/clients', [ClientController::class, 'index'])
 **Observações:**
 - Só cacheia `GET` com resposta `2xx`.
 - Chave por URL completa (`fullUrl`), incluindo query string — `?page=2` e `?page=3` são entradas distintas.
-- Cabeçalhos voláteis/sensíveis (`Set-Cookie`, `date`, `x-request-id`) **não** são cacheados. Respostas do cache trazem `X-Cached-By: cache-response-api`.
+- Apenas cabeçalhos seguros são cacheados (`content-type`, `cache-control`, `pragma`, `expires`, `x-ratelimit-*`) — `Set-Cookie`, `date`, `x-request-id` são descartados. Respostas do cache trazem `X-Cached-By: cache-response-api`.
 - Sem store com suporte a tags (ex.: `file`, `database`), cai em cache simples — **nenhuma** invalidação por tag funciona (nem core, nem resposta); só TTL. Aponte `repository.cache.store` para um store `redis` (ver [Store de cache e invalidação](#store-de-cache-e-invalidação-garantida)).
 
 ---
@@ -1194,7 +1198,7 @@ class ClientEloquentRepository extends BaseRepository implements ClientRepositor
 2. `$allowedColumns`;
 3. colunas reais da tabela (`Schema::getColumnListing`).
 
-Campos fora da whitelist são silenciosamente descartados. Aplica-se a `paginate()` e `paginateWithView()`.
+Campos fora da whitelist são silenciosamente descartados. Se **nenhuma** whitelist for detectada (repositório sem `$searchableColumns`, sem `$allowedColumns` e sem colunas detectáveis no schema), a busca textual é desabilitada — retorna `[]`. Aplica-se a `paginate()` e `paginateWithView()`.
 
 ```php
 class ClientEloquentRepository extends BaseRepository implements ClientRepository

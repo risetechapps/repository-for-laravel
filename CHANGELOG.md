@@ -3,6 +3,34 @@
 Todas as alterações notáveis neste projeto serão documentadas neste arquivo.
 O formato é baseado em [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), e este projeto segue o [Versionamento Semântico](https://semver.org/lang/pt-BR/) (SemVer).
 
+## [4.1.0] - 2026-07-28
+
+### Security
+- **Busca textual sem whitelist agora desabilitada**: `resolveSearchableFields()` retorna `[]` quando nenhuma whitelist é detectada, em vez de aceitar todos os campos enviados pelo cliente. Impede oracle attack via ILIKE mesmo quando schema introspection falha.
+- **Cache HTTP usa whitelist de headers seguros**: `cacheableHeaders()` agora só mantém `content-type`, `cache-control`, `pragma`, `expires`, `x-ratelimit-*`. Elimina risco de cache poisoning via headers arbitrários.
+- **`EntityNotFoundException` não vaza entidade/ID**: mensagem de erro genérica `"Recurso não encontrado."` em vez de expor FQCN da entidade e ID buscado.
+- **Removido `findById` do cache warming**: aquecer com `ID=1` hardcoded cacheava sentinela nula se o registro 1 não existisse, interferindo em `findOrFail` durante o TTL.
+
+### Fixed
+- **Race condition no `upsert()`**: agora executa dentro de `DB::transaction()` + captura `UniqueConstraintViolationException` com retry (mesma estratégia de `firstOrCreate`/`updateOrCreate`). Elimina duplicatas sob concorrência.
+- **`storeMany()` sem transação**: envolto em `DB::transaction()` — se um registro falhar, os anteriores são revertidos.
+- **`select()` com alias não sanitizado**: `$col` agora passa por `preg_replace` antes de ser usado como alias SQL.
+- **Type confusion no `update()`**: comparação `!==` mudou para `(string) ... !== (string) ...` — evita falso positivo entre `1` e `"1"` que invalidava cache desnecessariamente.
+- **`forceDelete()` não limpava relações em modelos não-trashed**: agora limpa relações (forceDelete) sempre que o model é encontrado, independente do estado `trashed()`.
+- **`paginateWithView()` com chave de cache não-determinística**: `spl_object_hash()` removido da chave — cache agora funciona entre requests.
+- **`serialize()` em chave de cache**: trocado para `json_encode()`, eliminando risco de object injection.
+- **Log do ServiceProvider vazava `CACHE_STORE` e comando CLI**: removidos do contexto do warning.
+- **`GenerateRepositoryCommand` expunha caminho absoluto**: mensagem de erro agora usa apenas o nome relativo.
+
+### Added
+- **`count()` e `exists()` agora usam cache**: resultados são cacheados com TTL padrão do repositório (via `rememberCache()`). Novas constantes `Repository::$methodCount` e `Repository::$methodExists`.
+- **`dataTable(?int $limit = 5000)`**: parâmetro opcional `$limit` (padrão 5000) para evitar OOM em tabelas grandes. Passe `null` para unlimited.
+- **Escopo de usuário no `cacheResponse`**: novo 3º parâmetro `auth` na definição da rota (`cacheResponse:600,tag,auth`) inclui `user_id` na chave de cache — impede que `/api/me` sirva dados de um usuário para outro.
+- **Rastreamento de `withoutEvents()`**: logging em nível `debug` com o nome do repositório quando eventos são suprimidos.
+
+### Changed
+- `CacheApiResponse` agora aceita 3 parâmetros: `cacheResponse:{ttl?},{entityTag?},{scope?}`.
+
 ## [4.0.1] - 2026-07-19
 
 ### Performance

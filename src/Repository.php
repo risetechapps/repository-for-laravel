@@ -7,7 +7,8 @@ use Illuminate\Support\Facades\Cache;
 
 class Repository
 {
-    public static array $driverNotSupported = ["file", "database"];
+    /** Fallback de config('repository.cache.unsupported_tag_drivers') — manter alinhado com config/config.php. */
+    public static array $driverNotSupported = ["file", "database", "dynamodb"];
     public static string $methodFirst = 'FIRST';
     public static string $methodAll = 'ALL';
     public static string $methodFind = 'FIND';

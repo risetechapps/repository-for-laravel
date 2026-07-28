@@ -60,9 +60,13 @@ return [
         'store' => env('REPOSITORY_CACHE_STORE', null),
 
         /*
-        | Drivers que não suportam tags
+        | Drivers que não suportam tags.
+        |
+        | NÃO inclua 'array' aqui: o ArrayStore do Laravel estende TaggableStore
+        | e suporta tags normalmente — marcá-lo como sem suporte desliga a
+        | invalidação por tag em ambiente de teste.
         */
-        'unsupported_tag_drivers' => ['file', 'database', 'array'],
+        'unsupported_tag_drivers' => ['file', 'database', 'dynamodb'],
 
         /*
         | Habilitar cache warming automático após escritas (re-aquece o cache

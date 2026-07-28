@@ -83,6 +83,17 @@ composer require risetechapps/repository-for-laravel
 php artisan vendor:publish --provider="RiseTechApps\Repository\RepositoryServiceProvider"
 ```
 
+Publicar é **opcional**: o package faz `mergeConfigFrom`, então os defaults de
+`config/config.php` valem mesmo sem publicar. Publique quando quiser registrar
+repositórios (`repository.repositories`) ou sobrescrever algum default.
+
+> ⚠️ **Merge é raso.** O `mergeConfigFrom` do Laravel mescla apenas o primeiro
+> nível. Se o `config/repository.php` publicado declarar `'cache' => ['store' => 'redis']`,
+> o sub-array `cache` inteiro substitui o do package — `warming_enabled`,
+> `warming_methods` e `unsupported_tag_drivers` somem do array. O código usa
+> `config(..., $default)` e continua funcionando, mas o arquivo publicado deixa de
+> refletir o que está em vigor. Ao publicar, mantenha o bloco `cache` completo.
+
 ### 3. Criar um Repository
 
 ```bash

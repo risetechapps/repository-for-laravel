@@ -12,4 +12,8 @@ class Product extends Model
     protected $table = 'products';
 
     protected $guarded = [];
+
+    protected $casts = [
+        'meta' => 'array',
+    ];
 }

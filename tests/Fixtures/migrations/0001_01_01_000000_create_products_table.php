@@ -13,6 +13,9 @@ return new class extends Migration {
             $table->string('email')->nullable();
             $table->integer('stock')->default(0);
             $table->string('status')->default('active');
+            $table->text('description')->nullable();
+            // jsonb no Postgres; o SQLiteGrammar mapeia para text.
+            $table->jsonb('meta')->nullable();
             $table->softDeletes();
             $table->timestamps();
         });

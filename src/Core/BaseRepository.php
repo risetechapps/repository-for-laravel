@@ -2538,13 +2538,50 @@ abstract class BaseRepository implements RepositoryInterface
 
     /**
      * Substitui placeholders ? pelos valores reais no SQL.
+     *
+     * Necessário porque o PostgreSQL não aceita parâmetros em DDL: o SQL de uma
+     * view materializada precisa ir literal no CREATE MATERIALIZED VIEW.
+     *
+     * Três cuidados que a implementação anterior não tinha:
+     *
+     *  1. substr_replace() em vez de preg_replace(): o valor entrava como
+     *     replacement string, então "$1" ou "\1" dentro do dado eram
+     *     interpretados como backreference e sumiam do SQL silenciosamente.
+     *  2. $offset avança além do valor inserido: sem isso, um "?" contido no
+     *     próprio dado era tratado como o próximo placeholder na iteração
+     *     seguinte, desalinhando todos os bindings restantes.
+     *  3. PDO::quote() em vez de addslashes(): com standard_conforming_strings
+     *     on (default do PG desde a 9.1) a barra invertida não escapa nada, e
+     *     addslashes deixava a aspa fechar a string — quebrando o SQL no melhor
+     *     caso e permitindo injeção de instrução única no pior. O escape do PG
+     *     é dobrar a aspa, que é o que o driver faz.
      */
     private function substituteBindings(string $sql, array $bindings): string
     {
+        $pdo = $this->connection()->getPdo();
+        $offset = 0;
+
         foreach ($bindings as $binding) {
-            $value = is_numeric($binding) ? $binding : "'" . addslashes((string) $binding) . "'";
-            $sql = preg_replace('/\?/', $value, (string) $sql, 1);
+            $pos = strpos($sql, '?', $offset);
+
+            if ($pos === false) {
+                break;
+            }
+
+            // is_numeric() era usado aqui e deixava strings numéricas ('1e3',
+            // ' 42') sem aspas, alterando a semântica da comparação.
+            $value = match (true) {
+                $binding === null => 'NULL',
+                is_bool($binding) => $binding ? 'true' : 'false',
+                is_int($binding), is_float($binding) => (string) $binding,
+                $binding instanceof \DateTimeInterface => $pdo->quote($binding->format('Y-m-d H:i:s')),
+                default => $pdo->quote((string) $binding),
+            };
+
+            $sql = substr_replace($sql, $value, $pos, 1);
+            $offset = $pos + strlen($value);
         }
+
         return $sql;
     }
 

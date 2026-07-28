@@ -24,7 +24,7 @@ class CacheApiResponse
      * @param int|null $ttl
      * @return Response
      */
-    public function handle(Request $request, Closure $next, ?string $ttl = null, ?string $entityTag = null): Response
+    public function handle(Request $request, Closure $next, ?string $ttl = null, ?string $entityTag = null, string $scope = ''): Response
     {
         if (!$request->isMethod('get')) {
             return $next($request);
@@ -35,7 +35,12 @@ class CacheApiResponse
             $entityTag = $ttl;
             $ttl = 3600;
         }
+
         $cacheKey = 'api_response:' . md5($request->fullUrl());
+
+        if ($scope === 'auth' && $request->user()) {
+            $cacheKey .= ':user_' . $request->user()->getKey();
+        }
 
         $supportsTags = $this->supportsTags();
         $tags = ['api_response'];
@@ -92,23 +97,36 @@ class CacheApiResponse
         return $response;
     }
 
+    private array $allowedHeaders = [
+        'content-type',
+        'cache-control',
+        'pragma',
+        'expires',
+        'x-ratelimit-limit',
+        'x-ratelimit-remaining',
+        'x-ratelimit-reset',
+    ];
+
     /**
      * Filtra os cabeçalhos que podem ser servidos do cache.
      *
-     * set-cookie carrega a sessão/CSRF do usuário que gerou a resposta —
-     * servi-lo cacheado a outro usuário vazaria a sessão. date/x-request-id
-     * são voláteis e não devem ser congelados no cache.
+     * Apenas cabeçalhos seguros e não-voláteis são mantidos:
+     * - set-cookie/date/x-request-id são removidos (vazamento de sessão
+     *   ou voláteis).
+     * - content-type é validado contra tipos conhecidos.
+     * - Qualquer outro cabeçalho é descartado.
      */
     private function cacheableHeaders(Response $response): array
     {
         $headers = $response->headers->all();
 
-        unset(
-            $headers['set-cookie'],
-            $headers['date'],
-            $headers['x-request-id'],
-        );
+        $safe = [];
+        foreach ($this->allowedHeaders as $name) {
+            if (isset($headers[$name])) {
+                $safe[$name] = $headers[$name];
+            }
+        }
 
-        return $headers;
+        return $safe;
     }
 }

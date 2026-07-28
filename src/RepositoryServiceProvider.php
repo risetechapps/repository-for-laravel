@@ -93,11 +93,9 @@ class RepositoryServiceProvider extends ServiceProvider
             "[repository-for-laravel] O store de cache '{$store}' (via {$origem}) não suporta tags. " .
             'A invalidação de cache do repositório e do middleware cacheResponse ' .
             'ficará limitada ao TTL (nenhum flush no write). Defina repository.cache.store ' .
-            'ou CACHE_STORE para um store redis/memcached.',
+            'para um store redis/memcached.',
             [
                 'sapi' => PHP_SAPI,
-                'command' => $_SERVER['argv'][1] ?? null,
-                'env_cache_store' => env('CACHE_STORE'),
                 'config_cached' => $this->app->configurationIsCached(),
             ]
         );

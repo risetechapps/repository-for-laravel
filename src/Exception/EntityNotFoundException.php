@@ -9,9 +9,7 @@ class EntityNotFoundException extends RepositoryException
 
     public function __construct(protected string $entityName, protected string|int|null $searchedId = null, ?string $message = null)
     {
-        $message ??= $this->searchedId !== null
-            ? "Entidade [{$this->entityName}] com ID [{$this->searchedId}] não encontrada."
-            : "Entidade [{$this->entityName}] não encontrada.";
+        $message ??= 'Recurso não encontrado.';
 
         parent::__construct($message, 404, null, [
             'entity' => $this->entityName,

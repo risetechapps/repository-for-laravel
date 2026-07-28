@@ -35,7 +35,7 @@ class GenerateRepositoryCommand extends Command
         $this->line("Creating Repository " . $repositoryName . "...");
 
         if (is_dir($pathRepository)) {
-            $this->error("Repository " . $repositoryName . " - " . $pathRepository . " already exists");
+            $this->error("Repository [{$repositoryName}] already exists at Repositories/{$repositoryName}");
             return;
         }
 

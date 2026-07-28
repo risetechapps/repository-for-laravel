@@ -999,7 +999,7 @@ abstract class BaseRepository implements RepositoryInterface
      */
     public function count(): int
     {
-        $result = $this->newQuery()->count();
+        $result = $this->rememberCache(fn() => $this->newQuery()->count(), Repository::$methodCount);
         $this->resetScope();
         return $result;
     }
@@ -1014,7 +1014,7 @@ abstract class BaseRepository implements RepositoryInterface
      */
     public function exists(): bool
     {
-        $result = $this->newQuery()->exists();
+        $result = (bool) $this->rememberCache(fn() => $this->newQuery()->exists(), Repository::$methodExists);
         $this->resetScope();
         return $result;
     }
@@ -1059,9 +1059,15 @@ abstract class BaseRepository implements RepositoryInterface
         return $this;
     }
 
-    public function dataTable()
+    public function dataTable(?int $limit = 5000)
     {
-        $result = $this->rememberCache(fn() => $this->newQuery()->get(), Repository::$methodDataTable);
+        $query = $this->newQuery();
+
+        if ($limit !== null) {
+            $query->limit($limit);
+        }
+
+        $result = $this->rememberCache(fn() => $query->get(), Repository::$methodDataTable, [$limit]);
 
         $this->resetScope();
         return $result;
@@ -1159,7 +1165,7 @@ abstract class BaseRepository implements RepositoryInterface
     protected function paginateWithView($totalPage): array
     {
         $request = request();
-        $cacheKey = 'paginate_view_' . md5(serialize($request->all()) . ($this->currentBuilder ? spl_object_hash($this->currentBuilder) : ''));
+        $cacheKey = 'paginate_view_' . md5(json_encode($request->all()));
 
         return $this->rememberCache(function () use ($totalPage, $request) {
             $perPage = $request->get('pagesize', $totalPage);
@@ -1240,11 +1246,8 @@ abstract class BaseRepository implements RepositoryInterface
 
         $whitelist = $this->searchableWhitelist();
 
-        // Nenhuma whitelist e nenhuma coluna detectável: mantém o comportamento
-        // anterior (sem filtro) para não quebrar apps existentes — mas declare
-        // $searchableColumns para fechar a superfície e habilitar os índices.
         if (empty($whitelist)) {
-            return array_values($requested);
+            return [];
         }
 
         $whitelist = array_map('strval', $whitelist);
@@ -1442,12 +1445,17 @@ abstract class BaseRepository implements RepositoryInterface
         }
 
         $created = [];
-        foreach ($records as $data) {
-            $created[] = $this->newQuery()->create($data);
-        }
-        $this->clearCacheForEntity();
+        return DB::transaction(function () use ($records) {
+            $created = [];
 
-        return $created;
+            foreach ($records as $data) {
+                $created[] = $this->newQuery()->create($data);
+            }
+
+            $this->clearCacheForEntity();
+
+            return $created;
+        });
     }
 
     /**
@@ -1464,32 +1472,48 @@ abstract class BaseRepository implements RepositoryInterface
             return [];
         }
 
-        $results = [];
+        return DB::transaction(function () use ($records, $uniqueBy) {
+            $results = [];
 
-        foreach ($records as $data) {
-            // Busca por chave única
-            $query = $this->newQuery()->newQuery();
-            foreach ($uniqueBy as $column) {
-                if (isset($data[$column])) {
-                    $query->where($column, $data[$column]);
-                }
+            foreach ($records as $data) {
+                $result = $this->attemptUpsertRecord($data, $uniqueBy);
+                $results[] = $result;
             }
 
-            $existing = $query->first();
+            $this->clearCacheForEntity();
 
-            if ($existing) {
-                // Atualiza
-                $existing->update($data);
-                $results[] = $existing->fresh();
-            } else {
-                // Cria novo
-                $results[] = $this->newQuery()->create($data);
+            return $results;
+        });
+    }
+
+    protected function attemptUpsertRecord(array $data, array $uniqueBy)
+    {
+        $query = $this->newQuery()->newQuery();
+        foreach ($uniqueBy as $column) {
+            if (isset($data[$column])) {
+                $query->where($column, $data[$column]);
             }
         }
 
-        $this->clearCacheForEntity();
+        try {
+            $existing = $query->first();
 
-        return $results;
+            if ($existing) {
+                $existing->update($data);
+                return $existing->fresh();
+            }
+
+            return $this->newQuery()->create($data);
+        } catch (UniqueConstraintViolationException) {
+            $existing = $query->useWritePdo()->first();
+
+            if ($existing) {
+                $existing->update($data);
+                return $existing->fresh();
+            }
+
+            return $this->newQuery()->create($data);
+        }
     }
 
     /**
@@ -1510,7 +1534,7 @@ abstract class BaseRepository implements RepositoryInterface
         // Detectar mudanças
         $changes = [];
         foreach ($data as $key => $value) {
-            if ($model->getAttribute($key) !== $value) {
+            if ((string) $model->getAttribute($key) !== (string) $value) {
                 $changes[$key] = [
                     'old' => $model->getAttribute($key),
                     'new' => $value,
@@ -1849,18 +1873,14 @@ abstract class BaseRepository implements RepositoryInterface
 
         if (!$model) return false;
 
-        if ($model->trashed()) {
-            foreach ($this->relationships as $relationship) {
-                $model->$relationship()->whereNotNull('deleted_at')->forceDelete();
-            }
-
-            $deleted = $model->forceDelete();
-            $this->clearCacheForEntity();
-
-            return (bool)$deleted;
+        foreach ($this->relationships as $relationship) {
+            $model->$relationship()->withTrashed(true)->whereNotNull('deleted_at')->forceDelete();
         }
 
-        return false;
+        $deleted = $model->forceDelete();
+        $this->clearCacheForEntity();
+
+        return (bool)$deleted;
     }
 
     /**
@@ -2251,7 +2271,8 @@ abstract class BaseRepository implements RepositoryInterface
                 $parts = explode('.', $col);
                 $tableColumn = preg_replace('/[^a-z0-9_]/i', '', $parts[0]);
                 $jsonKey = preg_replace('/[^a-z0-9_]/i', '', $parts[1]);
-                return DB::raw("\"{$tableColumn}\"->>'{$jsonKey}' as \"{$col}\"");
+                $safeAlias = preg_replace('/[^a-z0-9_.]/i', '', $col);
+                return DB::raw("\"{$tableColumn}\"->>'{$jsonKey}' as \"{$safeAlias}\"");
             }
             return $col;
         }, $columns);
@@ -2375,7 +2396,6 @@ abstract class BaseRepository implements RepositoryInterface
             match ($method) {
                 'get' => $this->get(),
                 'first' => $this->first(),
-                'findById' => $this->findById(1), // Usa ID 1 como exemplo
                 'dataTable' => $this->dataTable(),
                 default => null,
             };

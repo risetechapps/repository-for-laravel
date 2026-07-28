@@ -19,6 +19,8 @@ class Repository
     public static string $methodDataTable = 'DATATABLE';
     public static string $methodOrder = 'ORDER';
     public static string $methodPaginate = 'PAGINATE';
+    public static string $methodCount = 'COUNT';
+    public static string $methodExists = 'EXISTS';
     public static array $tagsCache = [];
 
     public static function setTagsCache(string $tag): void

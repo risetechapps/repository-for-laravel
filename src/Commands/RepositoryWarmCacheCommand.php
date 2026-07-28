@@ -9,7 +9,7 @@ use Symfony\Component\Console\Input\InputArgument;
 
 class RepositoryWarmCacheCommand extends Command
 {
-    protected $signature = 'repository:warm-cache {repository} {--methods=get,first,findById}';
+    protected $signature = 'repository:warm-cache {repository} {--methods=get,first}';
 
     protected $description = 'Pré-aquece o cache de um repository específico';
 
@@ -37,7 +37,6 @@ class RepositoryWarmCacheCommand extends Command
             match ($method) {
                 'get' => $repository->get(),
                 'first' => $repository->first(),
-                'findById' => $repository->findById(1),
                 'dataTable' => $repository->dataTable(),
                 default => $this->warn("    Método [{$method}] ignorado (não suportado)"),
             };

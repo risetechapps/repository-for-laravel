@@ -11,6 +11,10 @@ return new class extends Migration {
             $table->id();
             $table->string('name');
             $table->string('email')->nullable();
+            // Nullable + unique: os testes antigos não preenchem sku (vários
+            // NULLs são aceitos), e firstOrCreate/updateOrCreate precisam de uma
+            // constraint real para detectar criação concorrente.
+            $table->string('sku')->nullable()->unique();
             $table->integer('stock')->default(0);
             $table->string('status')->default('active');
             $table->text('description')->nullable();

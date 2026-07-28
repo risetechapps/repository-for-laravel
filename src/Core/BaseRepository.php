@@ -4,6 +4,7 @@ namespace RiseTechApps\Repository\Core;
 
 use Carbon\Carbon;
 use Illuminate\Database\Eloquent\SoftDeletes;
+use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -1560,6 +1561,13 @@ abstract class BaseRepository implements RepositoryInterface
 
     /**
      * Busca no banco (sem cache) e cria ou atualiza conforme existência.
+     *
+     * Devolve sempre o model, como o Eloquent — ver updateOrCreate().
+     *
+     * @param mixed $id
+     * @param array $data
+     * @return TModel|null O model criado/atualizado, ou null se a operação não
+     *                     aconteceu (vetada por listener).
      */
     public function createOrUpdate($id, array $data)
     {
@@ -1569,7 +1577,9 @@ abstract class BaseRepository implements RepositoryInterface
             return $this->store($data);
         }
 
-        return $this->update($id, $data);
+        return $this->update($id, $data)
+            ? $this->newQuery()->find($id)
+            : null;
     }
 
     /**
@@ -1578,21 +1588,64 @@ abstract class BaseRepository implements RepositoryInterface
      * Uso:
      *   $client = $repository->firstOrCreate(['email' => 'joao@email.com'], ['nome' => 'João']);
      *
+     * Pressupõe índice único nas colunas de $attributes: é ele que permite
+     * detectar a criação concorrente. Sem constraint no schema não há exception
+     * para capturar e duas requisições simultâneas duplicam o registro.
+     *
      * @param array $attributes Atributos para buscar
      * @param array $values Valores adicionais ao criar (opcional)
      * @return TModel|null O model encontrado ou criado
      */
     public function firstOrCreate(array $attributes, array $values = [])
     {
-        $result = $this->rememberCache(fn() => $this->newQuery()->where($attributes)->first(), Repository::$methodFirst, [$attributes]);
+        $existing = $this->readForWriteDecision($attributes);
 
-        if ($result) {
+        if ($existing) {
             $this->resetScope();
-            return $result;
+            return $existing;
         }
 
         $this->resetScope();
-        return $this->store(array_merge($attributes, $values));
+
+        try {
+            return $this->store(array_merge($attributes, $values));
+        } catch (UniqueConstraintViolationException $e) {
+            return $this->recoverFromConcurrentCreate($attributes, $e);
+        }
+    }
+
+    /**
+     * Leitura que serve de predicado para uma escrita (firstOrCreate /
+     * updateOrCreate): vai sempre ao banco, nunca ao cache.
+     *
+     * rememberCache() cacheia resultado negativo de propósito — a sentinela de
+     * miss existe justamente para preservar um first() que devolveu null. Isso
+     * é correto numa leitura, mas aqui decidiria "criar" com base num null de
+     * até defaultCacheTtlMinutes (24h) atrás. Pior: o flush que apagaria esse
+     * null depende de store taggable, então num store sem tags a decisão
+     * ficaria congelada pela janela inteira.
+     *
+     * @return TModel|null
+     */
+    protected function readForWriteDecision(array $attributes)
+    {
+        return $this->newQuery()->where($attributes)->first();
+    }
+
+    /**
+     * Outro processo criou o registro entre o nosso select e o nosso insert.
+     * Relê no PDO de escrita (evita réplica atrasada) e devolve o registro
+     * dele; se nem assim aparecer, a violação era de outra constraint e a
+     * exception segue.
+     *
+     * Mesma estratégia do Builder::createOrFirst() do Eloquent, que o package
+     * perdeu ao reimplementar firstOrCreate/updateOrCreate à mão.
+     *
+     * @return TModel
+     */
+    protected function recoverFromConcurrentCreate(array $attributes, UniqueConstraintViolationException $e)
+    {
+        return $this->newQuery()->useWritePdo()->where($attributes)->first() ?? throw $e;
     }
 
     /**
@@ -1601,21 +1654,48 @@ abstract class BaseRepository implements RepositoryInterface
      * Uso:
      *   $client = $repository->updateOrCreate(['email' => 'joao@email.com'], ['nome' => 'João Novo']);
      *
+     * Devolve sempre o model, como o Eloquent. Antes o caminho "atualizar"
+     * repassava o bool de update() enquanto o caminho "criar" devolvia o model,
+     * então `$repo->updateOrCreate(...)->id` funcionava na primeira chamada e
+     * quebrava a partir da segunda — falha dependente do estado do banco.
+     *
+     * O model é relido do banco (e não do cache) depois da escrita: é o estado
+     * real pós-update, não o registro possivelmente stale usado para decidir o
+     * caminho.
+     *
+     * Pressupõe índice único nas colunas de $attributes — ver firstOrCreate().
+     *
      * @param array $attributes Atributos para buscar
      * @param array $values Valores para atualizar/criar
-     * @return TModel|bool|null Model criado (caminho store) ou bool do update se já existia.
+     * @return TModel|null O model criado/atualizado, ou null se a operação não
+     *                     aconteceu (vetada por listener, ou o registro sumiu
+     *                     entre a leitura e a escrita).
      */
     public function updateOrCreate(array $attributes, array $values = [])
     {
-        $result = $this->rememberCache(fn() => $this->newQuery()->where($attributes)->first(), Repository::$methodFirst, [$attributes]);
+        $existing = $this->readForWriteDecision($attributes);
 
-        if ($result) {
+        if ($existing) {
             $this->resetScope();
-            return $this->update($result->getKey(), $values);
+
+            return $this->update($existing->getKey(), $values)
+                ? $this->newQuery()->find($existing->getKey())
+                : null;
         }
 
         $this->resetScope();
-        return $this->store(array_merge($attributes, $values));
+
+        try {
+            return $this->store(array_merge($attributes, $values));
+        } catch (UniqueConstraintViolationException $e) {
+            // Outro processo criou primeiro: aplica o $values no registro dele,
+            // que é o que o caminho "atualizar" teria feito.
+            $concorrente = $this->recoverFromConcurrentCreate($attributes, $e);
+
+            return $this->update($concorrente->getKey(), $values)
+                ? $this->newQuery()->find($concorrente->getKey())
+                : null;
+        }
     }
 
     /**

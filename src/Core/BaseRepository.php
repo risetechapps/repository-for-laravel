@@ -281,6 +281,11 @@ abstract class BaseRepository implements RepositoryInterface
     public function withoutEvents(): static
     {
         $this->eventsEnabled = false;
+
+        logger()->debug('[repository-for-laravel] Events suppressed via withoutEvents()', [
+            'repository' => static::class,
+        ]);
+
         return $this;
     }
 

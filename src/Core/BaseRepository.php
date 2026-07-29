@@ -1165,7 +1165,6 @@ abstract class BaseRepository implements RepositoryInterface
     protected function paginateWithView($totalPage): array
     {
         $request = request();
-        $cacheKey = 'paginate_view_' . md5(json_encode($request->all()));
 
         return $this->rememberCache(function () use ($totalPage, $request) {
             $perPage = $request->get('pagesize', $totalPage);
@@ -1444,7 +1443,6 @@ abstract class BaseRepository implements RepositoryInterface
             return [];
         }
 
-        $created = [];
         return DB::transaction(function () use ($records) {
             $created = [];
 
@@ -1553,7 +1551,7 @@ abstract class BaseRepository implements RepositoryInterface
         $updated = $model->update($data);
 
         // Recarregar model com dados atualizados
-        $model->fresh();
+        $model = $model->fresh();
 
         // Evento após atualizar
         $this->fireEvent(new RepositoryUpdated($this, $model, $data, $changes, 'updated'));
@@ -1843,8 +1841,8 @@ abstract class BaseRepository implements RepositoryInterface
 
         $deleted = $model->delete();
 
-        // Evento após deletar (soft delete)
-        $this->fireEvent(new RepositoryDeleted($this, $model, [], 'deleted', true));
+        // Evento após deletar
+        $this->fireEvent(new RepositoryDeleted($this, $model, [], 'deleted', $this->hasContainsSoftDelete));
 
         $this->clearCacheForEntity();
 

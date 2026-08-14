@@ -4,6 +4,7 @@ namespace RiseTechApps\Repository\Core;
 
 use Carbon\Carbon;
 use Illuminate\Database\Eloquent\SoftDeletes;
+use Illuminate\Database\QueryException;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
@@ -2734,31 +2735,78 @@ abstract class BaseRepository implements RepositoryInterface
     protected function createSingleMaterializedView(string $view, string $query, bool $strict = false): void
     {
         try {
-            $this->connection()->statement("CREATE MATERIALIZED VIEW {$view} AS {$query}");
+            // IF NOT EXISTS cobre a view que já existia mas que o check anterior
+            // não enxergou (search_path, nome ocupado por outra relação).
+            $this->connection()->statement("CREATE MATERIALIZED VIEW IF NOT EXISTS {$view} AS {$query}");
 
-            // Catálogo administrativo central (conexão default) — ver docblock.
-            DB::table('materialized_views')->updateOrInsert(
-                ['name' => $view],
-                [
-                    'user_id' => auth()->id(),
-                    'created_at' => now(),
-                    'last_refreshed_at' => now(),
-                    'active' => true,
-                ]
-            );
-        } catch (\Throwable $e) {
-            if ($strict) {
-                throw MaterializedViewException::creationFailed($view, $query, $e);
+            $this->registerViewInCatalog($view);
+        } catch (QueryException $e) {
+            // Race: outra sessão criou a mesma view entre o nosso
+            // materializedViewExists() e este CREATE. O IF NOT EXISTS não fecha
+            // essa janela — a checagem interna dele roda no mesmo ponto.
+            //
+            //  - 42P07 (duplicate_table): a outra transação já havia commitado.
+            //  - 23505 (unique_violation em pg_type_typname_nsp_index): as duas
+            //    passaram pela checagem de nome e colidiram no catálogo do PG.
+            //
+            // Em ambos o resultado desejado já está no banco: confirmamos com um
+            // recheck e seguimos como sucesso, sem deixar o catálogo furado.
+            if ($this->isDuplicateRelationError($e) && $this->materializedViewExists($view)) {
+                $this->registerViewInCatalog($view);
+
+                return;
             }
-            Log::error('Erro Register Materialized View', [$e->getMessage()]);
+
+            $this->handleViewCreationFailure($view, $query, $e, $strict);
+        } catch (\Throwable $e) {
+            $this->handleViewCreationFailure($view, $query, $e, $strict);
         }
     }
 
+    /**
+     * Catálogo administrativo central (conexão default) — ver docblock de
+     * createSingleMaterializedView().
+     */
+    protected function registerViewInCatalog(string $view): void
+    {
+        DB::table('materialized_views')->updateOrInsert(
+            ['name' => $view],
+            [
+                'user_id' => auth()->id(),
+                'created_at' => now(),
+                'last_refreshed_at' => now(),
+                'active' => true,
+            ]
+        );
+    }
+
+    private function handleViewCreationFailure(string $view, string $query, \Throwable $e, bool $strict): void
+    {
+        if ($strict) {
+            throw MaterializedViewException::creationFailed($view, $query, $e);
+        }
+
+        Log::error("Erro ao criar materialized view [{$view}]: " . $e->getMessage());
+    }
+
+    private function isDuplicateRelationError(QueryException $e): bool
+    {
+        return in_array($e->errorInfo[0] ?? null, ['42P07', '23505'], true);
+    }
+
+    /**
+     * to_regclass() resolve pelo search_path (em vez do 'public' hardcoded que
+     * ficava cego para views em schema de tenant), aceita nome qualificado
+     * (`schema.view`) e devolve NULL sem erro quando o objeto não existe. O
+     * relkind = 'm' garante que um nome ocupado por tabela ou view comum não
+     * passe por matview.
+     */
     protected function materializedViewExists(string $view): bool
     {
-        $result = $this->connection()->select("
-            SELECT 1 FROM pg_matviews WHERE schemaname = 'public' AND matviewname = ?
-        ", [$view]);
+        $result = $this->connection()->select(
+            "SELECT 1 FROM pg_class WHERE oid = to_regclass(?) AND relkind = 'm'",
+            [$view]
+        );
 
         return !empty($result);
     }

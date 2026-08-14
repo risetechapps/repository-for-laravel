@@ -3,6 +3,13 @@
 Todas as alterações notáveis neste projeto serão documentadas neste arquivo.
 O formato é baseado em [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), e este projeto segue o [Versionamento Semântico](https://semver.org/lang/pt-BR/) (SemVer).
 
+## [Não lançado]
+
+### Fixed
+- **`CREATE MATERIALIZED VIEW` falhava quando a view já existia**: o check `materializedViewExists()` + `CREATE` era um check-then-create sem proteção. Sob concorrência (o `useMaterializedView()` cria sob demanda em qualquer request, enquanto o job de refresh também cria) duas sessões passavam pela checagem de nome e colidiam no catálogo do PG — `SQLSTATE[23505] ... pg_type_typname_nsp_index`. Agora o `CREATE` usa `IF NOT EXISTS` e os erros `42P07`/`23505` são tratados como no-op idempotente (com recheck), incluindo o registro no catálogo administrativo, que antes ficava furado quando o `CREATE` falhava.
+- **`materializedViewExists()` era cego fora do schema `public`**: a consulta filtrava `pg_matviews` por `schemaname = 'public'` hardcoded, então uma view em schema de tenant nunca era encontrada e o package tentava recriá-la a cada chamada. Agora usa `to_regclass(?)` + `relkind = 'm'`, que respeita o `search_path`, aceita nome qualificado (`schema.view`) e não confunde matview com tabela/view comum de mesmo nome.
+- **Log de falha na criação de view não dizia qual view**: `'Erro Register Materialized View'` passou a incluir o nome da view na mensagem.
+
 ## [4.1.0] - 2026-07-28
 
 ### Security

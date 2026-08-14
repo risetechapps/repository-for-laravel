@@ -42,6 +42,11 @@ function viewRepository(array $views): ProductEloquentRepository
         {
             return $this->views;
         }
+
+        public function viewExists(string $view): bool
+        {
+            return $this->materializedViewExists($view);
+        }
     };
 }
 
@@ -63,6 +68,57 @@ it('creates a materialized view and registers it in the admin catalog', function
     expect($exists)->not->toBeEmpty()
         ->and(DB::table('vw_products_active')->count())->toBe(1)
         ->and(DB::table('materialized_views')->where('name', 'vw_products_active')->exists())->toBeTrue();
+});
+
+it('does not fail when the materialized view already exists', function () {
+    Product::create(['name' => 'Ativo', 'status' => 'active']);
+
+    $views = ['vw_products_active' => "SELECT id, name FROM products WHERE status = 'active'"];
+
+    viewRepository($views)->createMaterializedViews(strict: true);
+
+    // Simula a janela da race: a view existe no banco, mas o repositório vai
+    // tentar criá-la de novo porque o check dele não a viu (outro processo
+    // criou logo depois). Antes: 42P07/23505 estourava até em strict.
+    $repo = new class($views) extends ProductEloquentRepository {
+        public function __construct(private readonly array $views)
+        {
+            parent::__construct();
+        }
+
+        public function registerViews(): array
+        {
+            return $this->views;
+        }
+
+        protected function materializedViewExists(string $view): bool
+        {
+            return false;
+        }
+    };
+
+    $repo->createMaterializedViews(strict: true);
+})->throwsNoExceptions();
+
+it('detects an existing materialized view outside the public schema', function () {
+    DB::statement('CREATE SCHEMA IF NOT EXISTS tenant_probe');
+    DB::statement('SET search_path TO tenant_probe, public');
+
+    try {
+        // A matview nasce em tenant_probe: o antigo check com
+        // schemaname = 'public' hardcoded não a encontrava.
+        DB::statement("CREATE MATERIALIZED VIEW vw_products_active AS SELECT id FROM public.products");
+
+        $repo = viewRepository(['vw_products_active' => 'SELECT id FROM public.products']);
+
+        expect($repo->viewExists('vw_products_active'))->toBeTrue();
+
+        // Sem exceção: antes o check dava falso negativo e o CREATE colidia.
+        $repo->createMaterializedViews(strict: true);
+    } finally {
+        DB::statement('DROP SCHEMA IF EXISTS tenant_probe CASCADE');
+        DB::statement('SET search_path TO public');
+    }
 });
 
 it('refreshes a materialized view and updates last_refreshed_at', function () {

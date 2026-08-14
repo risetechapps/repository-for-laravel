@@ -3,7 +3,7 @@
 Todas as alterações notáveis neste projeto serão documentadas neste arquivo.
 O formato é baseado em [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), e este projeto segue o [Versionamento Semântico](https://semver.org/lang/pt-BR/) (SemVer).
 
-## [Não lançado]
+## [4.1.1] - 2026-08-14
 
 ### Fixed
 - **`CREATE MATERIALIZED VIEW` falhava quando a view já existia**: o check `materializedViewExists()` + `CREATE` era um check-then-create sem proteção. Sob concorrência (o `useMaterializedView()` cria sob demanda em qualquer request, enquanto o job de refresh também cria) duas sessões passavam pela checagem de nome e colidiam no catálogo do PG — `SQLSTATE[23505] ... pg_type_typname_nsp_index`. Agora o `CREATE` usa `IF NOT EXISTS` e os erros `42P07`/`23505` são tratados como no-op idempotente (com recheck), incluindo o registro no catálogo administrativo, que antes ficava furado quando o `CREATE` falhava.

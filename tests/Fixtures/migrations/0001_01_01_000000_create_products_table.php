@@ -17,6 +17,8 @@ return new class extends Migration {
             $table->string('sku')->nullable()->unique();
             $table->integer('stock')->default(0);
             $table->string('status')->default('active');
+            // Coluna com cast de enum: (string) em enum nativo lança Error.
+            $table->string('gender')->nullable();
             $table->text('description')->nullable();
             // jsonb no Postgres; o SQLiteGrammar mapeia para text.
             $table->jsonb('meta')->nullable();

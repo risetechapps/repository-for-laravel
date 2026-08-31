@@ -15,5 +15,6 @@ class Product extends Model
 
     protected $casts = [
         'meta' => 'array',
+        'gender' => Gender::class,
     ];
 }

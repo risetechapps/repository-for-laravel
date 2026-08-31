@@ -1516,6 +1516,43 @@ abstract class BaseRepository implements RepositoryInterface
     }
 
     /**
+     * Compara o valor atual do atributo com o novo valor de forma tolerante a
+     * enums, datas e value objects. Um cast direto para string lança Error em
+     * objetos sem __toString (ex.: enums nativos vindos de casts do model).
+     */
+    protected function attributeMatches(mixed $current, mixed $new): bool
+    {
+        $current = $this->normalizeForComparison($current);
+        $new = $this->normalizeForComparison($new);
+
+        if (is_scalar($current) && is_scalar($new)) {
+            return (string) $current === (string) $new;
+        }
+
+        return $current === $new;
+    }
+
+    /**
+     * Reduz um valor a algo comparável: enums viram value/name, datas viram
+     * string, Arrayable vira array, null vira '' (mantém a semântica anterior
+     * do cast para string) e booleanos viram '1'/'0'. Objetos sem conversão
+     * possível são devolvidos como estão e comparados por identidade.
+     */
+    protected function normalizeForComparison(mixed $value): mixed
+    {
+        return match (true) {
+            $value instanceof \BackedEnum => $value->value,
+            $value instanceof \UnitEnum => $value->name,
+            $value instanceof \DateTimeInterface => $value->format('Y-m-d H:i:s'),
+            $value instanceof \Illuminate\Contracts\Support\Arrayable => $value->toArray(),
+            is_null($value) => '',
+            is_bool($value) => $value ? '1' : '0',
+            is_object($value) && method_exists($value, '__toString') => (string) $value,
+            default => $value,
+        };
+    }
+
+    /**
      * Busca o model diretamente no banco (sem cache) antes de atualizar,
      * evitando atualizar um objeto stale retornado pelo cache.
      */
@@ -1533,7 +1570,7 @@ abstract class BaseRepository implements RepositoryInterface
         // Detectar mudanças
         $changes = [];
         foreach ($data as $key => $value) {
-            if ((string) $model->getAttribute($key) !== (string) $value) {
+            if (! $this->attributeMatches($model->getAttribute($key), $value)) {
                 $changes[$key] = [
                     'old' => $model->getAttribute($key),
                     'new' => $value,
@@ -1688,7 +1725,7 @@ abstract class BaseRepository implements RepositoryInterface
      * quebrava a partir da segunda — falha dependente do estado do banco.
      *
      * O model é relido do banco (e não do cache) depois da escrita: é o estado
-     * real pós-update, não o registro possivelmente stale usado para decidir o
+     * real pós-update, não o registro possívelmente stale usado para decidir o
      * caminho.
      *
      * Pressupõe índice único nas colunas de $attributes — ver firstOrCreate().

@@ -838,6 +838,8 @@ $clientRepository->storeMany([
 #### `update($id, array $data)`
 Atualiza um registro pelo ID. Busca diretamente no banco (sem cache) para evitar atualizar dados desatualizados.
 
+Antes de gravar, compara cada campo recebido com o valor atual do model e monta o array `changes` entregue aos eventos `RepositoryUpdating` / `RepositoryUpdated`. A comparação é tolerante a tipo: atributos com cast para enum nativo, `DateTimeInterface`, `Arrayable` ou `array`/`json` são normalizados antes de comparar — `Gender::Male` e `'male'` contam como o mesmo valor, e `null` equivale a `''`. Valores sem conversão possível são comparados por identidade.
+
 ```php
 $clientRepository->update(1, [
     'nome'  => 'João Atualizado',

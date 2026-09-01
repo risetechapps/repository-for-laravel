@@ -3,6 +3,11 @@
 Todas as alterações notáveis neste projeto serão documentadas neste arquivo.
 O formato é baseado em [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), e este projeto segue o [Versionamento Semântico](https://semver.org/lang/pt-BR/) (SemVer).
 
+## [4.1.2] - 2026-08-30
+
+### Fixed
+- **`update()` lançava `Error: Object of class ... could not be converted to string`**: a detecção de mudancas comparava `(string) $model->getAttribute($key) !== (string) $value`, cast introduzido na 4.1.0 para resolver o type confusion entre `1` e `"1"`. O cast assume valor escalar e explode em qualquer atributo com cast para enum nativo (`Object of class App\Enums\Gender could not be converted to string`), e também em `array`/`json` (`Array to string conversion`). Agora a comparacao passa por `attributeMatches()`/`normalizeForComparison()`: enums viram `value`/`name`, `DateTimeInterface` vira string, `Arrayable` vira array, `null` continua equivalente a `''` (comportamento anterior preservado) e objetos sem conversão possível são comparados por identidade em vez de castados.
+
 ## [4.1.1] - 2026-08-14
 
 ### Fixed

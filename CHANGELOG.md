@@ -3,6 +3,19 @@
 Todas as alterações notáveis neste projeto serão documentadas neste arquivo.
 O formato é baseado em [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), e este projeto segue o [Versionamento Semântico](https://semver.org/lang/pt-BR/) (SemVer).
 
+## [4.2.0] - 2026-09-20
+
+### Added
+- Busca textual do `paginate()`/`paginateWithView()` agora localiza registros por qualquer combinação de palavras do termo digitado (ex.: "Mateus Reis" encontra "Mateus Soares Reis"), em vez de exigir a frase exata na mesma ordem.
+- Suporte opcional a busca sem distinção de acentos (`jose` encontra `José`), via nova propriedade `$searchUnaccent` (desligada por padrão) e função `immutable_unaccent()` no banco.
+- Nova migration `create_unaccent_extension` habilitando a extensão `unaccent` do PostgreSQL e a função wrapper `immutable_unaccent()`.
+
+### Fixed
+- Termos de busca com `%` ou `_` não são mais interpretados como curinga de `ILIKE` (agora escapados).
+
+### Changed
+- Lógica de busca de `paginate()` e `paginateWithView()` unificada no método `applySearch()`, eliminando duplicação de código.
+
 ## [4.1.2] - 2026-08-30
 
 ### Fixed

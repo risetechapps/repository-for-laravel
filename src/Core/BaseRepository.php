@@ -71,6 +71,20 @@ abstract class BaseRepository implements RepositoryInterface
     protected array $allowedColumns = [];
 
     /**
+     * Ignora acentos na busca textual do paginate() ("jose" acha "José").
+     *
+     * Exige, no banco, a extensão unaccent + a função immutable_unaccent()
+     * (ver migration create_unaccent_extension) E índice de expressão sobre
+     * immutable_unaccent(coluna) para cada searchable field — sem o índice a
+     * busca funciona, mas cai em full scan. Por isso o padrão é false: fica a
+     * cargo de cada repository ligar quando a migration/índices já existirem.
+     *
+     * Uso: sobrescreva no repository concreto —
+     *   protected bool $searchUnaccent = true;
+     */
+    protected bool $searchUnaccent = false;
+
+    /**
      * Colunas liberadas para a busca textual do paginate() (parâmetro
      * `searchable_fields` do request). Duas funções:
      *
@@ -1126,16 +1140,7 @@ abstract class BaseRepository implements RepositoryInterface
 
         $query = $this->newQuery();
 
-        if (!empty(trim($search ?? '')) && !empty($searchableFields)) {
-            $query->where(function ($mainQuery) use ($search, $searchableFields) {
-                foreach ($searchableFields as $index => $field) {
-                    $dbField = str_replace('.', '->>', $field);
-                    $index === 0
-                        ? $mainQuery->where($dbField, 'ILIKE', "%{$search}%")
-                        : $mainQuery->orWhere($dbField, 'ILIKE', "%{$search}%");
-                }
-            });
-        }
+        $this->applySearch($query, $search, $searchableFields);
 
         $sortColumn = $this->resolveSortColumn($request->get('sort_column', 'id'));
 
@@ -1180,16 +1185,7 @@ abstract class BaseRepository implements RepositoryInterface
                 $query = $this->viewQuery();
             }
 
-            if (!empty(trim($search ?? '')) && !empty($searchableFields)) {
-                $query->where(function ($mainQuery) use ($search, $searchableFields) {
-                    foreach ($searchableFields as $index => $field) {
-                        $dbField = str_replace('.', '->>', $field);
-                        $index === 0
-                            ? $mainQuery->where($dbField, 'ILIKE', "%{$search}%")
-                            : $mainQuery->orWhere($dbField, 'ILIKE', "%{$search}%");
-                    }
-                });
-            }
+            $this->applySearch($query, $search, $searchableFields);
 
             // Aplica ordenação do request se não houver ordenação manual
             if (!$this->currentBuilder || !str_contains((string)$query->toSql(), 'ORDER BY')) {
@@ -1228,6 +1224,59 @@ abstract class BaseRepository implements RepositoryInterface
         }
 
         return in_array($column, $this->allowedSortColumns) ? $resolved : 'id';
+    }
+
+    /**
+     * Aplica busca textual "por palavras" na query: cada palavra do termo
+     * digitado vira uma condição obrigatória (AND entre palavras), e cada
+     * palavra pode bater em qualquer um dos campos pesquisáveis (OR entre
+     * campos). Assim "Mateus Reis" encontra "Mateus Soares Reis" mesmo sem
+     * as palavras aparecerem coladas ou na mesma ordem do cadastro.
+     *
+     * Os curingas de LIKE (% e _) digitados pelo usuário são escapados, senão
+     * "_" casaria com qualquer caractere e "%" faria um match vazio.
+     *
+     * Continua usando ILIKE '%x%' por palavra, então o índice GIN pg_trgm
+     * (RepositorySearchIndexesCommand) permanece útil.
+     */
+    protected function applySearch($query, ?string $search, array $fields): void
+    {
+        $search = trim((string) $search);
+
+        if ($search === '' || empty($fields)) {
+            return;
+        }
+
+        $terms = preg_split('/\s+/u', $search, -1, PREG_SPLIT_NO_EMPTY);
+
+        // Limite defensivo: evita que um termo com dezenas de palavras
+        // gere uma query com dezenas de AND/OR encadeados.
+        $terms = array_slice($terms, 0, 6);
+
+        $useUnaccent = $this->searchUnaccent;
+
+        foreach ($terms as $term) {
+            $like = '%' . addcslashes($term, '\\%_') . '%';
+
+            $query->where(function ($termQuery) use ($fields, $like, $useUnaccent) {
+                foreach ($fields as $index => $field) {
+                    $dbField = str_replace('.', '->>', $field);
+                    $method = $index === 0 ? 'where' : 'orWhere';
+
+                    if ($useUnaccent) {
+                        // Parênteses em volta da coluna: sem eles, um path JSON
+                        // ('dados->>cpf') quebraria a precedência dentro da
+                        // chamada de função.
+                        $termQuery->{$method . 'Raw'}(
+                            "immutable_unaccent(({$dbField})::text) ILIKE immutable_unaccent(?)",
+                            [$like]
+                        );
+                    } else {
+                        $termQuery->{$method}($dbField, 'ILIKE', $like);
+                    }
+                }
+            });
+        }
     }
 
     /**

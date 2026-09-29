@@ -3,6 +3,7 @@
 namespace RiseTechApps\Repository\Core;
 
 use Carbon\Carbon;
+use Illuminate\Contracts\Database\Query\Expression;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Database\QueryException;
 use Illuminate\Database\UniqueConstraintViolationException;
@@ -1238,6 +1239,17 @@ abstract class BaseRepository implements RepositoryInterface
      *
      * Continua usando ILIKE '%x%' por palavra, então o índice GIN pg_trgm
      * (RepositorySearchIndexesCommand) permanece útil.
+     *
+     * Campos aceitos:
+     * - string: coluna simples ou path JSON ('dados.cpf' vira 'dados->>cpf');
+     * - Expression (DB::raw('tabela.coluna')): usada literalmente, sem a
+     *   conversão para path JSON — é como uma query com JOIN pesquisa coluna
+     *   qualificada. É SQL cru: nunca montar a partir de input do cliente
+     *   (a busca vinda do request passa por resolveSearchableFields(), que
+     *   só devolve strings da whitelist).
+     *
+     * Fora do PostgreSQL (ex.: suíte em SQLite) cai para LIKE e ignora
+     * $searchUnaccent, já que ILIKE e immutable_unaccent() não existem lá.
      */
     protected function applySearch($query, ?string $search, array $fields): void
     {
@@ -1253,15 +1265,25 @@ abstract class BaseRepository implements RepositoryInterface
         // gere uma query com dezenas de AND/OR encadeados.
         $terms = array_slice($terms, 0, 6);
 
-        $useUnaccent = $this->searchUnaccent;
+        $isPostgres = $query->getConnection()->getDriverName() === 'pgsql';
+        $useUnaccent = $this->searchUnaccent && $isPostgres;
+        $operator = $isPostgres ? 'ILIKE' : 'LIKE';
+        $grammar = $query->getGrammar();
 
         foreach ($terms as $term) {
             $like = '%' . addcslashes($term, '\\%_') . '%';
 
-            $query->where(function ($termQuery) use ($fields, $like, $useUnaccent) {
-                foreach ($fields as $index => $field) {
-                    $dbField = str_replace('.', '->>', $field);
+            $query->where(function ($termQuery) use ($fields, $like, $useUnaccent, $operator, $grammar) {
+                foreach (array_values($fields) as $index => $field) {
+                    $dbField = $field instanceof Expression
+                        ? $field->getValue($grammar)
+                        : str_replace('.', '->>', $field);
                     $method = $index === 0 ? 'where' : 'orWhere';
+
+                    if ($field instanceof Expression && !$useUnaccent) {
+                        $termQuery->{$method}($field, $operator, $like);
+                        continue;
+                    }
 
                     if ($useUnaccent) {
                         // Parênteses em volta da coluna: sem eles, um path JSON
@@ -1272,7 +1294,7 @@ abstract class BaseRepository implements RepositoryInterface
                             [$like]
                         );
                     } else {
-                        $termQuery->{$method}($dbField, 'ILIKE', $like);
+                        $termQuery->{$method}($dbField, $operator, $like);
                     }
                 }
             });

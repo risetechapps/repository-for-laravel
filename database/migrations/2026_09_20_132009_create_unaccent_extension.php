@@ -24,6 +24,12 @@ return new class extends Migration
 {
     public function up(): void
     {
+        // Extensão e função são recursos do PostgreSQL; em outro driver (ex.:
+        // suíte em SQLite) o applySearch() já não usa unaccent.
+        if (DB::getDriverName() !== 'pgsql') {
+            return;
+        }
+
         DB::statement('CREATE EXTENSION IF NOT EXISTS unaccent');
 
         DB::statement(<<<'SQL'
@@ -36,6 +42,10 @@ return new class extends Migration
 
     public function down(): void
     {
+        if (DB::getDriverName() !== 'pgsql') {
+            return;
+        }
+
         DB::statement('DROP FUNCTION IF EXISTS immutable_unaccent(text)');
         DB::statement('DROP EXTENSION IF EXISTS unaccent');
     }

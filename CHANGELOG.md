@@ -3,6 +3,15 @@
 Todas as alterações notáveis neste projeto serão documentadas neste arquivo.
 O formato é baseado em [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), e este projeto segue o [Versionamento Semântico](https://semver.org/lang/pt-BR/) (SemVer).
 
+## [4.2.1] - 2026-09-29
+
+### Added
+- `applySearch()` aceita `Expression` (`DB::raw('tabela.coluna')`) como campo de busca, usada literalmente, sem a conversão para path JSON. Permite que queries com JOIN (colunas qualificadas) reaproveitem a busca por palavras, o escape de `%`/`_` e o `$searchUnaccent`. Campos string mantêm o comportamento anterior (`dados.cpf` continua virando `dados->>cpf`). A busca vinda do request (`searchable_fields`) segue passando pela whitelist e só aceita strings.
+
+### Fixed
+- **Suíte inteira quebrava fora do PostgreSQL**: a migration `create_unaccent_extension` executava `CREATE EXTENSION` em qualquer driver (`near "EXTENSION": syntax error` no SQLite). Agora é no-op fora do `pgsql`.
+- `applySearch()` usava `ILIKE` fixo, inexistente no SQLite. Fora do PostgreSQL passa a usar `LIKE` e ignora `$searchUnaccent`.
+
 ## [4.2.0] - 2026-09-20
 
 ### Added

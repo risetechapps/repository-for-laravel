@@ -24,9 +24,9 @@ class CacheApiResponse
      * @param int|null $ttl
      * @return Response
      */
-    public function handle(Request $request, Closure $next, ?string $ttl = null, ?string $entityTag = null, string $scope = ''): Response
+    public function handle(Request $request, Closure $next, ?string $ttl = null, ?string $entityTag = null, string $scope = 'auth'): Response
     {
-        if (!$request->isMethod('get')) {
+        if (!$request->isMethod('get') || !Repository::cacheEnabled()) {
             return $next($request);
         }
 
@@ -36,10 +36,18 @@ class CacheApiResponse
             $ttl = 3600;
         }
 
+        // `cacheResponse:600,,public` — tag vazia = sem tag.
+        if ($entityTag === '') {
+            $entityTag = null;
+        }
+
         $cacheKey = 'api_response:' . md5($request->fullUrl());
 
-        if ($scope === 'auth' && $request->user()) {
-            $cacheKey .= ':user_' . $request->user()->getKey();
+        // Por padrão a resposta de um usuário logado é cacheada só para ele: a
+        // mesma URL pode devolver dados diferentes por usuário (permissões,
+        // filiais, /me). Rotas de conteúdo idêntico para todos usam `public`.
+        if ($scope !== 'public' && $request->user()) {
+            $cacheKey .= ':user_' . $request->user()->getAuthIdentifier();
         }
 
         $supportsTags = $this->supportsTags();

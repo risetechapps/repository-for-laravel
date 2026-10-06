@@ -1018,6 +1018,39 @@ $clientRepository->find(1)->forceDelete();
 
 ### Cache avançado
 
+#### Ligar e desligar o cache
+Duas chaves, combinadas com **E**:
+
+```php
+// config/repository.php (ou .env)
+'cache' => [
+    'enabled' => env('REPOSITORY_CACHE_ENABLED', true), // chave GERAL
+    'default_ttl' => env('REPOSITORY_CACHE_TTL', 15),   // minutos
+],
+```
+
+```php
+// Por repositório — ex.: cadastro transacional sem cache, catálogo com cache
+class ClientEloquentRepository extends BaseRepository implements ClientRepository
+{
+    protected bool $cacheEnabled = false;
+}
+```
+
+Com o cache desligado (geral ou no repositório):
+
+- as leituras vão direto ao banco — nada é lido nem gravado no store;
+- a escrita **não** dispara `RepositoryBefore/AfterClearingCacheEvent` nem o `RegenerateCacheJob`;
+- as **views materializadas continuam sendo refeitas** (não dependem do cache);
+- a API (`withoutCache()`, `cacheFor()`, `cacheIf()`, `flushTags()`, `warmCache()`) continua existindo e vira no-op/passagem direta — nenhum código que a usa precisa mudar;
+- com a chave **geral** desligada, o middleware `cacheResponse` também vira passagem direta e `Repository::flushEntity()` vira no-op.
+
+`isCacheEnabled()` informa o estado efetivo do repositório.
+
+**TTL padrão** — precedência: `cacheFor()` da chamada → `$defaultCacheTtlMinutes` **se o repositório a sobrescrever** → `repository.cache.default_ttl` → 1440 (24h).
+
+---
+
 #### `cacheFor()` / `cacheForHours()` / `cacheForDays()`
 Define o TTL da próxima operação (encadeável; resetado após a operação).
 
@@ -1099,15 +1132,20 @@ $clientRepository->withoutEvents()->find($id)->delete();
 > Não confunda com o guard de reentrância acima: o guard protege contra loop **sempre**, mesmo sem `withoutEvents()`. O `withoutEvents()` é controle explícito de quem chama o repositório.
 
 #### Cache warming
-Após uma escrita, o `RegenerateCacheJob` re-aquece o cache recém-limpo. Controlado por config:
+Opcional e **desligado por padrão** (rebuild lazy no próximo read). Ligado, após uma escrita o `RegenerateCacheJob` re-aquece o cache recém-limpo:
 
 ```php
 // config/repository.php
 'cache' => [
-    'warming_enabled' => true,            // false = rebuild lazy no próximo read
+    'warming_enabled' => env('REPOSITORY_CACHE_WARMING', false),
     'warming_methods' => ['get', 'first'], // aceita: get, first, dataTable (findById não é mais aquecido)
 ],
 ```
+
+> ⚠️ O job roda no worker, sem o usuário/contexto de quem lê. Se o store de cache for segmentado por contexto (ex.: multi-tenant com prefixo por tenant/filial/usuário), ele aquece uma chave que ninguém consulta — e ainda executa um `get()` da tabela inteira a cada escrita. Só ligue com cache global (não segmentado).
+
+#### Invalidação depois do refresh das views
+`refreshMaterializedViews()` invalida o cache da entidade **depois** do `REFRESH` (disparando os eventos de limpeza, sem warming nem novo refresh). Sem isso, uma leitura entre o write e o job de refresh lia a view ainda antiga e a deixava cacheada até o TTL.
 
 #### Cache de resposta HTTP (`cacheResponse`)
 Middleware que cacheia a resposta inteira de rotas **GET** — evita reprocessar controller + repositório em endpoints de leitura. Registrado automaticamente pelo package com o alias `cacheResponse`.
@@ -1133,7 +1171,13 @@ Route::get('/clients', [ClientController::class, 'index'])
     ->middleware('cacheResponse:'.\App\Models\Client::class);
 ```
 
-**Parâmetros:** `cacheResponse:{ttl?},{entityTag?},{scope?}`. Se o primeiro argumento não for um inteiro positivo, é tratado como `entityTag` e o TTL cai no padrão (3600s). O terceiro parâmetro `auth` inclui o `user_id` na chave de cache — use em rotas de dados do usuário logado (`/api/me`) para evitar que um usuário receba dados de outro.
+**Parâmetros:** `cacheResponse:{ttl?},{entityTag?},{scope?}`. Se o primeiro argumento não for um inteiro positivo, é tratado como `entityTag` e o TTL cai no padrão (3600s). Tag vazia (`cacheResponse:600,,public`) = sem tag.
+
+**Escopo (`scope`):** por padrão (`auth`), com usuário logado o identificador dele entra na chave — cada usuário tem seu próprio cache da rota, porque a mesma URL pode devolver dados diferentes por usuário (permissões, filiais, `/me`). Requisições anônimas compartilham a entrada. Use `public` só em rotas cujo conteúdo é **idêntico para todos**:
+
+```php
+->middleware('cacheResponse:600,'.\App\Models\Category::class.',public');
+```
 
 **Invalidação por entidade (escopada):** o `entityTag` amarra a resposta cacheada ao cache da entidade no repositório. Em toda escrita (`store`/`update`/`delete`), o `flushEntityCache()` limpa **apenas** as respostas marcadas com a tag daquela entidade — um write em `Client` **não** derruba o cache de `Product`, `Order`, etc.
 
@@ -1145,9 +1189,9 @@ Route::get('/clients', [ClientController::class, 'index'])
 // ✅ Invalida quando ClientRepository escreve — ::class evita typo no FQCN
 ->middleware('cacheResponse:600,'.\App\Models\Client::class);
 
-// ✅ Com escopo por usuário (dados sensíveis do usuário logado)
+// ✅ Escopo por usuário é o padrão (o `,auth` explícito continua aceito)
 Route::get('/me', [ProfileController::class, 'show'])
-    ->middleware('cacheResponse:600,'.\App\Models\User::class.',auth');
+    ->middleware('cacheResponse:600,'.\App\Models\User::class);
 
 // ⚠️ Só TTL — nenhum write derruba esta entrada
 ->middleware('cacheResponse:600');

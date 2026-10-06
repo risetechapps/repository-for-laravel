@@ -53,6 +53,19 @@ class Repository
     }
 
     /**
+     * Chave geral do cache (config repository.cache.enabled).
+     *
+     * Desligada, o cache de query do repositório E o middleware cacheResponse
+     * viram passagem direta: nada é lido, gravado ou invalidado no store e os
+     * jobs de warming não são disparados. A API (withoutCache(), cacheFor(),
+     * flushTags()...) continua existindo — quem a usa não precisa mudar nada.
+     */
+    public static function cacheEnabled(): bool
+    {
+        return (bool) config('repository.cache.enabled', true);
+    }
+
+    /**
      * Indica se o store do repositório suporta tags. Resolve o driver do store
      * configurado (não o default da app) e checa contra a lista de drivers sem
      * suporte a tags (config repository.cache.unsupported_tag_drivers).
@@ -78,11 +91,11 @@ class Repository
      *
      *   Repository::flushEntity(\App\Models\Client::class);
      *
-     * No-op quando o store não suporta tags.
+     * No-op quando o cache está desligado ou o store não suporta tags.
      */
     public static function flushEntity(string $modelClass): void
     {
-        if (!static::storeSupportsTags()) {
+        if (!static::cacheEnabled() || !static::storeSupportsTags()) {
             return;
         }
 

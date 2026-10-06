@@ -43,9 +43,21 @@ return [
     */
     'cache' => [
         /*
-        | Tempo padrão de expiração do cache em minutos (null = usar config do repository)
+        | Chave geral do cache. false = o cache de query de TODOS os repositórios
+        | e o middleware cacheResponse viram passagem direta (nada é lido, gravado
+        | ou invalidado; nenhum job de warming). A API (withoutCache(), cacheFor(),
+        | flushTags()...) continua existindo — nenhum package precisa mudar.
+        | Por repositório: `protected bool $cacheEnabled = false;`.
+        | As views materializadas NÃO dependem disto: continuam sendo refeitas.
         */
-        'default_ttl' => null,
+        'enabled' => (bool) env('REPOSITORY_CACHE_ENABLED', true),
+
+        /*
+        | Tempo padrão de expiração do cache em minutos. Vale para repositórios
+        | que NÃO sobrescrevem $defaultCacheTtlMinutes; cacheFor() da chamada
+        | sempre prevalece. null = 1440 (24h, comportamento antigo).
+        */
+        'default_ttl' => env('REPOSITORY_CACHE_TTL', 15),
 
         /*
         | Store de cache usado pelo repositório (core) e pelo middleware
@@ -70,10 +82,13 @@ return [
 
         /*
         | Habilitar cache warming automático após escritas (re-aquece o cache
-        | que o clearCacheForEntity acabou de limpar). Default true mantém o
-        | comportamento histórico; defina false para rebuild lazy (no próximo read).
+        | que o clearCacheForEntity acabou de limpar). Default false (rebuild lazy
+        | no próximo read): o RegenerateCacheJob roda no worker, num contexto
+        | (usuário/filial) diferente de quem lê — com cache segmentado por
+        | contexto ele aquece uma chave que ninguém consulta e ainda executa um
+        | get() da tabela inteira a cada escrita.
         */
-        'warming_enabled' => true,
+        'warming_enabled' => (bool) env('REPOSITORY_CACHE_WARMING', false),
 
         /*
         | Métodos re-aquecidos pelo warming. Aceita: get, first, dataTable.

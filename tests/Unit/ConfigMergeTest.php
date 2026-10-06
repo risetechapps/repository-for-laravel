@@ -9,7 +9,9 @@ it('merges the package config so repository.* exists without publishing', functi
     expect(config('repository'))->toBeArray()
         ->and(config('repository.cache'))->toBeArray()
         ->and(config()->has('repository.cache.store'))->toBeTrue()
-        ->and(config('repository.cache.warming_enabled'))->toBeTrue()
+        ->and(config('repository.cache.enabled'))->toBeTrue()
+        ->and(config('repository.cache.warming_enabled'))->toBeFalse()
+        ->and(config('repository.cache.default_ttl'))->toBe(15)
         ->and(config('repository.cache.warming_methods'))->toBe(['get', 'first'])
         ->and(config('repository.repositories'))->toBe([]);
 });

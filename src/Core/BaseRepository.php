@@ -165,9 +165,19 @@ abstract class BaseRepository implements RepositoryInterface
 
     /**
      * TTL padrão do cache em minutos.
-     * Subclasses podem sobrescrever para definir um padrão diferente.
+     *
+     * Precedência (getCacheTtl): cacheFor() da chamada → esta propriedade, se o
+     * repositório a SOBRESCREVER → config repository.cache.default_ttl → 1440.
      */
     protected int $defaultCacheTtlMinutes = 1440; // 24 horas
+
+    /**
+     * Liga/desliga o cache de query DESTE repositório. Útil para manter cache só
+     * onde compensa (catálogos, configurações) e desligar em cadastros
+     * transacionais. A chave geral repository.cache.enabled sempre prevalece:
+     * desligada lá, este valor é ignorado.
+     */
+    protected bool $cacheEnabled = true;
 
     /**
      * TTL customizado para a próxima operação (em minutos).
@@ -514,8 +524,9 @@ abstract class BaseRepository implements RepositoryInterface
     {
         $startTime = microtime(true);
 
-        // withoutCache() ativo: executa direto sem armazenar ou consultar o cache
-        if ($this->bypassCache) {
+        // withoutCache() ativo, ou cache desligado (geral ou neste repositório):
+        // executa direto sem armazenar ou consultar o cache
+        if ($this->bypassCache || !$this->isCacheEnabled()) {
             $result = $call();
             $this->trackQueryMetrics($startTime, $method);
             self::$metrics['total_cache_misses']++;
@@ -561,13 +572,40 @@ abstract class BaseRepository implements RepositoryInterface
     }
 
     /**
+     * Cache de query ativo para este repositório: chave geral
+     * (repository.cache.enabled) E a propriedade $cacheEnabled.
+     */
+    public function isCacheEnabled(): bool
+    {
+        return $this->cacheEnabled && Repository::cacheEnabled();
+    }
+
+    /**
      * Retorna o TTL efetivo do cache.
-     * Usa customCacheTtlMinutes se definido, senão usa defaultCacheTtlMinutes.
+     *
+     * Precedência: cacheFor() da chamada → $defaultCacheTtlMinutes quando o
+     * repositório a sobrescreve → config repository.cache.default_ttl → 1440.
      */
     protected function getCacheTtl(): Carbon
     {
-        $minutes = $this->customCacheTtlMinutes ?? $this->defaultCacheTtlMinutes;
-        return Carbon::now()->addMinutes($minutes);
+        $minutes = $this->customCacheTtlMinutes
+            ?? ($this->overridesDefaultCacheTtl() ? $this->defaultCacheTtlMinutes : null)
+            ?? config('repository.cache.default_ttl')
+            ?? $this->defaultCacheTtlMinutes;
+
+        return Carbon::now()->addMinutes((int) $minutes);
+    }
+
+    /**
+     * Se a subclasse redeclara $defaultCacheTtlMinutes — o TTL escolhido por
+     * ela vale mais que o default global do config.
+     */
+    protected function overridesDefaultCacheTtl(): bool
+    {
+        static $cache = [];
+
+        return $cache[static::class] ??= (new \ReflectionProperty($this, 'defaultCacheTtlMinutes'))
+            ->getDeclaringClass()->getName() !== self::class;
     }
 
     /**
@@ -605,6 +643,23 @@ abstract class BaseRepository implements RepositoryInterface
     {
         $entity = $this->getEntityClassName();
 
+        // Sem cache de query neste repositório: nada a invalidar entre gavetas
+        // nem a re-aquecer — os eventos de limpeza não são disparados (quem os
+        // ouve faz varredura de cache à toa). O flush por tag continua (barato
+        // e alcança o cacheResponse da entidade; no-op com a chave geral
+        // desligada) e as views SEMPRE são refeitas: não dependem do cache.
+        if (!$this->isCacheEnabled()) {
+            $this->flushEntityCache();
+
+            try {
+                $this->dispatchMaterializedViewsRefresh();
+            } catch (\Exception $exception) {
+                Log::error("Error processing cache clearing for {$entity}: " . $exception->getMessage());
+            }
+
+            return;
+        }
+
         // Já dentro de um ciclo de clear desta entidade (chamada reentrante vinda
         // de um listener de RepositoryBefore/AfterClearingCacheEvent): faz apenas
         // o flush e retorna, sem re-disparar eventos nem re-agendar jobs. Quebra
@@ -623,7 +678,10 @@ abstract class BaseRepository implements RepositoryInterface
 
             try {
                 // Cache warming controlado por config — re-aquece o cache recém-limpo.
-                if (config('repository.cache.warming_enabled', true)) {
+                // Default false: o job roda no worker, num contexto (usuário,
+                // filial) diferente de quem lê, e costuma aquecer uma chave que
+                // ninguém consulta. Rebuild lazy no próximo read é o padrão.
+                if (config('repository.cache.warming_enabled', false)) {
                     $methods = $this->resolveWarmingMethods();
 
                     if (!empty($methods)) {
@@ -631,11 +689,7 @@ abstract class BaseRepository implements RepositoryInterface
                     }
                 }
 
-                // Só refaz views se o repositório de fato declarar alguma.
-                // Evita job e serialização de auth desnecessários em repos sem view.
-                if (!empty($this->registerViews())) {
-                    dispatch(new RefreshMaterializedViewsJob($this, ['auth' => auth()->user()]));
-                }
+                $this->dispatchMaterializedViewsRefresh();
             } catch (\Exception $exception) {
                 Log::error("Error processing cache clearing for {$entity}: " . $exception->getMessage());
             }
@@ -645,6 +699,17 @@ abstract class BaseRepository implements RepositoryInterface
             // try/finally garante liberação da trava mesmo em exceção —
             // seguro em workers de fila / Octane (instância reutilizada).
             unset(self::$cacheClearingEntities[$entity]);
+        }
+    }
+
+    /**
+     * Enfileira o refresh das views materializadas — só se o repositório de fato
+     * declarar alguma (evita job e serialização de auth desnecessários).
+     */
+    protected function dispatchMaterializedViewsRefresh(): void
+    {
+        if (!empty($this->registerViews())) {
+            dispatch(new RefreshMaterializedViewsJob($this, ['auth' => auth()->user()]));
         }
     }
 
@@ -717,7 +782,7 @@ abstract class BaseRepository implements RepositoryInterface
      */
     public function flushTags(array $tags): void
     {
-        if (!$this->supportTag || empty($tags)) {
+        if (!Repository::cacheEnabled() || !$this->supportTag || empty($tags)) {
             return;
         }
 
@@ -2499,6 +2564,11 @@ abstract class BaseRepository implements RepositoryInterface
      */
     public function warmCache(array $methods): void
     {
+        // Sem cache, "aquecer" só executaria as queries e descartaria o resultado.
+        if (!$this->isCacheEnabled()) {
+            return;
+        }
+
         foreach ($methods as $method) {
             match ($method) {
                 'get' => $this->get(),
@@ -2965,7 +3035,47 @@ abstract class BaseRepository implements RepositoryInterface
             }
         }
 
+        $this->flushCacheAfterViewRefresh();
+
         $this->fireEvent(new AfterRefreshAllMaterializedViewsJobEvent());
+    }
+
+    /**
+     * Invalida o cache da entidade DEPOIS do REFRESH das views.
+     *
+     * O clearCacheForEntity() do write limpa o cache antes do job de refresh
+     * rodar; uma leitura nesse intervalo lê a view ainda antiga e a grava no
+     * cache — que, sem esta segunda limpeza, ficaria servindo o dado velho até o
+     * TTL ou o próximo write. Dispara os eventos de limpeza (sem warming nem novo
+     * refresh) para que ouvintes invalidem também as gavetas de outros contextos.
+     */
+    protected function flushCacheAfterViewRefresh(): void
+    {
+        if (!$this->isCacheEnabled()) {
+            return;
+        }
+
+        $entity = $this->getEntityClassName();
+
+        // Refresh rodando dentro de um ciclo de clear desta entidade (fila sync):
+        // o ciclo externo já dispara os eventos — aqui basta o flush.
+        if (!empty(self::$cacheClearingEntities[$entity])) {
+            $this->flushEntityCache();
+
+            return;
+        }
+
+        self::$cacheClearingEntities[$entity] = true;
+
+        try {
+            $this->fireEvent(new RepositoryBeforeClearingCacheEvent($this));
+            $this->flushEntityCache();
+            $this->fireEvent(new RepositoryAfterClearingCacheEvent($this));
+        } catch (\Throwable $e) {
+            Log::error("Erro ao invalidar o cache de {$entity} após o refresh das views: " . $e->getMessage());
+        } finally {
+            unset(self::$cacheClearingEntities[$entity]);
+        }
     }
 
     public function cleanMaterializedView(): void
